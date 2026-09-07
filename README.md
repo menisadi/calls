@@ -1,0 +1,137 @@
+# calls
+
+A CLI for a phone call recording archive: import recordings off the phone,
+transcribe them, tag them by topic with a local model, and search them.
+
+```
+call import                          # copy new recordings, then finish what's outstanding
+call index -s 'תקלה במערכת'           # full-text search the transcripts
+call index -l --contact 0525252145   # list one contact's calls
+call index -l --untagged             # find calls that never got tagged
+call rm '[1455]_[1455]_2026-08-30_20-22-21'
+```
+
+## How the archive is laid out
+
+Two layers, and the split is the whole design:
+
+**Files are the source of truth.** Each call is three files sharing a base name:
+
+```
+[Contact]_[Phone]_2026-08-27_14-44-31.opus   the recording
+[Contact]_[Phone]_2026-08-27_14-44-31.txt    the transcript
+[Contact]_[Phone]_2026-08-27_14-44-31.json   the sidecar
+```
+
+The sidecar holds contact, phone (as recorded plus an E.164-normalized form),
+direction, duration, channel count, the topic tag, and per-stage pipeline
+status. Everything in it except the tag and the direction is derived from
+observable facts, so refreshing it is idempotent and self-healing — it can
+never claim more than what is actually on disk.
+
+**The index is derived and disposable.** `call index` rebuilds `calls.db`
+(SQLite + FTS5) and re-renders `index.md` from the sidecars. Delete either and
+rebuild; nothing is lost. That is what makes the index safe to change — a new
+column, a different tokenizer, a different format — without any risk to the
+archive itself.
+
+## Why it works this way
+
+**Per-stage status, not "does a file exist".** The pipeline used to treat "a
+`.txt` exists" as "this call is fully handled". A call whose transcription
+succeeded but whose tagging failed was therefore skipped on every later run and
+never reached the index — silently, forever. Transcript and tag are now
+separate stages, each independently resumable, and every run sweeps the whole
+archive rather than only what is still on the phone.
+
+**Tags, not summaries.** The tag is one general category plus one or two
+specific subjects, and it is deliberately short. Prose summaries were tried and
+rejected: under a "summarize" framing, models this size (DictaLM 1.7B,
+Qwen3-4B) ignore length instructions and produce full sentences or markdown
+bullet lists. "Topic tag" framing keeps them terse. English output is also
+markedly more verbose than Hebrew for the same model. The index exists to be
+*scanned* — to find the right recording, and to spot recordings worth deleting
+— so the fix for a vague tag is more structure, not a longer field.
+
+**Trigram full-text search.** FTS5's default `unicode61` tokenizer matches
+whole tokens, and Hebrew glues prefixes onto words (ה/ו/ב/ל/מ/ש) with no
+stemmer available in SQLite — a search for `תקלה` would not find `בתקלה`. The
+trigram tokenizer matches substrings instead. The trade-off is that queries
+need at least 3 characters.
+
+**Phone numbers are the identity, not names.** The contact name in a filename
+comes from the address book at record time, so it drifts; the same person
+appeared as both `[דור אקוקה]_[0547602488]` and
+`[דור אקוקה]_[+972547602488]`. The sidecar normalizes to E.164 so those
+collapse into one identity, and `--contact` normalizes the needle too, so
+either form finds every call.
+
+**Direction is captured at import.** The recorder splits calls into
+`incoming/` and `outgoing/`, and the flattened filename does not carry that.
+Import is the only moment it is knowable, so it is recorded then; calls whose
+originals were pruned before this existed are `unknown` and cannot be
+recovered.
+
+**Bracketed filenames are matched literally.** Recorder names look like
+`[1455]_[1455]_…`, and both shell globs and `find -name` read `[1455]` as a
+character class matching a single one of `1`, `4` or `5`. Matching by glob
+found nothing at all. Basenames are compared as strings.
+
+## Transcription stays a shell script
+
+`callscribe` (in `~/bin`) is not a subcommand here, on purpose. It is an
+ffmpeg/whisper-cli/awk pipeline: it detects whether a recording's two channels
+carry genuinely different audio, transcribes each channel separately and merges
+them on a shared clock for real speaker attribution, and carries portability
+workarounds for macOS `tr` locale behaviour and BSD/GNU `stat`. Reimplementing
+that in Python would mean shelling out to the same binaries and rewriting the
+awk state machines worse. It is also useful on arbitrary audio, with no
+knowledge of this archive. `call import` invokes it; `CALLS_SCRIBE` points
+somewhere else if needed.
+
+## Install
+
+```sh
+uv tool install ~/Code/personal/calls     # puts `call` on PATH
+uv tool install --force --reinstall .     # after making changes
+```
+
+Requires `ffprobe` (duration/channels), `callscribe` (transcription) and
+`trash` (recoverable removal; `call rm --permanent` skips it).
+
+## Configuration
+
+Every path and model is an environment variable:
+
+| Variable | Default |
+|---|---|
+| `CALLS_DIR` | `~/Recordings/calls` |
+| `CALLS_PHONEREC_DIR` | `~/Recordings/PhoneRec` |
+| `CALLS_DB` | `$CALLS_DIR/calls.db` |
+| `CALLS_MARKDOWN` | `$CALLS_DIR/index.md` |
+| `CALLS_SCRIBE` | `callscribe` |
+| `CALLS_MODEL_HE` | `~/.local/share/mlx/DictaLM-3.0-1.7B-Instruct-bf16` |
+| `CALLS_MODEL_EN` | `mlx-community/Qwen3-4B-4bit-DWQ-053125` |
+| `CALLS_LANG` | `he` |
+| `CALLS_MAX_TOKENS` | `300` |
+| `CALLS_COUNTRY_CODE` | `972` |
+
+Use `-l en` for mostly-English transcripts: DictaLM is Hebrew-tuned and gives
+weaker, more generic tags on English-heavy content.
+
+## Development
+
+```sh
+uv sync
+uv run ruff format .
+uv run ruff check . --fix
+uv run ty check
+uv run -m pytest
+```
+
+## Not done yet
+
+Filenames are still the recorder's, in one flat directory. Renaming to a
+sortable ASCII scheme under `YYYY/MM/` was considered and deliberately
+deferred — the sidecar already carries stable identity, so the layout change
+can happen whenever, independently.

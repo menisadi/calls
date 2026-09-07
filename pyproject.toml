@@ -1,0 +1,35 @@
+[project]
+name = "calls"
+version = "0.1.0"
+description = "Import, transcribe, tag and search a phone call recording archive"
+readme = "README.md"
+authors = [
+    { name = "menisadi", email = "menisadi@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "mlx-lm>=0.28",
+]
+
+[project.scripts]
+call = "calls.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.9,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.6",
+    "ty>=0.0.78",
+]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
