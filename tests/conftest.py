@@ -25,7 +25,6 @@ def config(tmp_path: Path) -> Config:
         calls_dir=calls_dir,
         phonerec_dir=phonerec_dir,
         db_path=calls_dir / "calls.db",
-        markdown_path=calls_dir / "index.md",
         scribe_command="callscribe-not-installed",
         model_he="model-he",
         model_en="model-en",

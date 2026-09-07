@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 import pytest
 
 from calls import index, sidecar
@@ -178,36 +176,6 @@ class TestListing:
     def test_limit_is_applied(self, archive: Config):
         index.build(archive)
         assert len(index.listing(archive, Filters(), limit=2)) == 2
-
-
-class TestMarkdown:
-    def test_renders_a_row_per_call_newest_first(self, archive: Config):
-        index.build(archive)
-        assert index.render_markdown(archive) == 3
-
-        lines = archive.markdown_path.read_text(encoding="utf-8").splitlines()
-        assert lines[0].startswith("| Date | Time | Dir |")
-        assert len(lines) == 5  # header, separator, three rows
-        assert "2026-08-30" in lines[2]
-
-    def test_escapes_a_pipe_in_a_tag(self, config: Config, make_call):
-        recording = make_call("[X]_[0501234567]_2026-09-01_10-00-00", transcript="t")
-        data = sidecar.refresh(recording, config)
-        data["tag"] = Tag(general="a | b").to_json()
-        sidecar.write(sidecar.sidecar_path_for(recording), data)
-
-        index.build(config)
-        index.render_markdown(config)
-        row = config.markdown_path.read_text(encoding="utf-8").splitlines()[2]
-        # A stray pipe would silently add a column and break the table.
-        assert r"a \| b" in row
-        assert len(re.split(r"(?<!\\)\|", row)) - 2 == 8  # leading/trailing empties
-
-    def test_writes_to_an_explicit_path(self, archive: Config, tmp_path):
-        index.build(archive)
-        target = tmp_path / "elsewhere.md"
-        index.render_markdown(archive, target)
-        assert target.is_file()
 
 
 class TestFormatDuration:

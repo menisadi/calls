@@ -299,36 +299,3 @@ def format_duration(seconds: float | None) -> str:
         return "--:--"
     total = int(seconds)
     return f"{total // 60:02d}:{total % 60:02d}"
-
-
-def render_markdown(config: Config, markdown_path: Path | None = None) -> int:
-    """Regenerate the human-readable markdown index as a view of the database.
-
-    Kept because a plain scannable table is genuinely useful, but it is now
-    derived output: chronologically sorted, never duplicated, and safe to
-    delete. Pipe characters in a tag are escaped so a topic can't break the
-    table.
-    """
-    target = markdown_path or config.markdown_path
-    connection = connect(config.db_path)
-    try:
-        rows = connection.execute(
-            "SELECT * FROM calls ORDER BY date DESC, time DESC"
-        ).fetchall()
-    finally:
-        connection.close()
-
-    lines = [
-        "| Date | Time | Dir | Contact | Phone | Length | File | Topic |",
-        "|------|------|-----|---------|-------|--------|------|-------|",
-    ]
-    for row in rows:
-        direction = row["direction"] if row["direction"] in ("in", "out") else ""
-        tag = row["tag"].replace("|", "\\|")
-        lines.append(
-            f"| {row['date']} | {row['time']} | {direction} | {row['contact']} | "
-            f"{row['phone'] or row['phone_raw'] or ''} | "
-            f"{format_duration(row['duration_seconds'])} | {row['base']} | {tag} |"
-        )
-    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return len(rows)

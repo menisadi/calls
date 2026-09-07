@@ -30,10 +30,15 @@ observable facts, so refreshing it is idempotent and self-healing — it can
 never claim more than what is actually on disk.
 
 **The index is derived and disposable.** `call index` rebuilds `calls.db`
-(SQLite + FTS5) and re-renders `index.md` from the sidecars. Delete either and
-rebuild; nothing is lost. That is what makes the index safe to change — a new
-column, a different tokenizer, a different format — without any risk to the
-archive itself.
+(SQLite + FTS5) from the sidecars. Delete it and rebuild; nothing is lost.
+That is what makes the index safe to change — a new column, a different
+tokenizer, a different format — without any risk to the archive itself.
+
+There is deliberately only one index. An earlier `index.md` table was dropped
+once `calls.db` existed: it was a third copy of data already held in two
+places, rewritten on every build, and the only artifact whose format could
+break on an odd tag. `call index -l` scans better than a table did, and this
+archive is local-only, so nothing else was ever going to read the file.
 
 ## Why it works this way
 
@@ -108,7 +113,6 @@ Every path and model is an environment variable:
 | `CALLS_DIR` | `~/Recordings/calls` |
 | `CALLS_PHONEREC_DIR` | `~/Recordings/PhoneRec` |
 | `CALLS_DB` | `$CALLS_DIR/calls.db` |
-| `CALLS_MARKDOWN` | `$CALLS_DIR/index.md` |
 | `CALLS_SCRIBE` | `callscribe` |
 | `CALLS_MODEL_HE` | `~/.local/share/mlx/DictaLM-3.0-1.7B-Instruct-bf16` |
 | `CALLS_MODEL_EN` | `mlx-community/Qwen3-4B-4bit-DWQ-053125` |

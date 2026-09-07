@@ -38,7 +38,6 @@ class Config:
     calls_dir: Path
     phonerec_dir: Path
     db_path: Path
-    markdown_path: Path
     scribe_command: str
     model_he: str
     model_en: str
@@ -60,7 +59,6 @@ class Config:
                 "CALLS_PHONEREC_DIR", home / "Recordings" / "PhoneRec"
             ),
             db_path=_path_env("CALLS_DB", calls_dir / "calls.db"),
-            markdown_path=_path_env("CALLS_MARKDOWN", calls_dir / "index.md"),
             # Transcription stays an external shell tool: it is an
             # ffmpeg/whisper-cli pipeline, and is useful on arbitrary audio
             # with no knowledge of this archive.

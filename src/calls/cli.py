@@ -59,8 +59,6 @@ def _rebuild(config: Config, notify) -> None:
         notify(f"  {report.without_tag} without a topic tag")
     for name in report.skipped:
         _warn(f"{PROGRAM_NAME}: skipped {name}: not a call sidecar")
-    rendered = index.render_markdown(config)
-    notify(f"wrote {rendered} rows to {config.markdown_path}")
 
 
 def _report_import(report: ImportReport, notify) -> int:
@@ -207,11 +205,6 @@ def cmd_index(args: argparse.Namespace, config: Config) -> int:
     if args.list:
         _print_rows(index.listing(config, filters, args.limit), show_snippet=False)
         return 0
-    if args.markdown is not None:
-        target = Path(args.markdown) if args.markdown else config.markdown_path
-        notify(f"wrote {index.render_markdown(config, target)} rows to {target}")
-        return 0
-
     _rebuild(config, notify)
     return 0
 
@@ -272,7 +265,6 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             f"  CALLS_DIR            Archive directory (default: {config.calls_dir})\n"
             f"  CALLS_PHONEREC_DIR   Recorder folder (default: {config.phonerec_dir})\n"
             f"  CALLS_DB             Index database (default: {config.db_path})\n"
-            f"  CALLS_MARKDOWN       Rendered index (default: {config.markdown_path})\n"
             "  CALLS_SCRIBE         Transcription tool "
             f"(default: {config.scribe_command})\n"
             "  CALLS_MODEL_HE       MLX model for --lang he\n"
@@ -377,8 +369,8 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         parents=[common],
         help="rebuild, search or list the index",
         description=(
-            "With no options, rebuilds the SQLite index and re-renders the "
-            "markdown table from the sidecars. Search is substring-based "
+            "With no options, rebuilds the SQLite index from the sidecars. "
+            "Search is substring-based "
             "(FTS5 trigram), so queries need at least 3 characters and Hebrew "
             "prefixes do not hide matches."
         ),
@@ -394,12 +386,6 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
     idx.add_argument("-s", "--search", help="full-text search across transcripts")
     idx.add_argument(
         "-l", "--list", action="store_true", help="list calls instead of rebuilding"
-    )
-    idx.add_argument(
-        "--markdown",
-        nargs="?",
-        const="",
-        help="re-render only the markdown index (optionally to a given path)",
     )
     idx.add_argument("--contact", help="filter by contact name or phone substring")
     idx.add_argument(

@@ -112,7 +112,7 @@ class CallName:
         date = match.group("date")
         time = match.group("time").replace("-", ":")
         # The regex only checks shape, so validate the instant itself: this
-        # date sorts the index and heads the markdown table, and a nonsense
+        # date is what orders the index, and a nonsense
         # value there is worse than falling back to the file's mtime.
         try:
             datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M:%S")
