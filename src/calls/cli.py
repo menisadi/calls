@@ -278,8 +278,20 @@ def _resolve_hash(raw: str, config: Config) -> list[str]:
 def cmd_rm(args: argparse.Namespace, config: Config) -> int:
     notify = _reporter(args.quiet)
 
+    names = list(args.names)
+    if args.contact:
+        filters = Filters(contact=args.contact, country_code=config.country_code)
+        matches = index.listing(config, filters, limit=sys.maxsize)
+        if not matches:
+            _warn(f"{PROGRAM_NAME}: no calls match contact '{args.contact}'")
+            return 1
+        names.extend(row["base"] for row in matches)
+    if not names:
+        _warn(f"{PROGRAM_NAME}: nothing to remove")
+        return 1
+
     removed = 0
-    for raw in args.names:
+    for raw in names:
         base_name = Path(raw).name.rsplit(".", 1)[0]
         files = pipeline.matching_files(base_name, config)
         if not files:
@@ -507,11 +519,15 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
     )
     remover.add_argument(
         "names",
-        nargs="+",
+        nargs="*",
         help=(
             "call base name, any of its files, or the hash id shown by "
             "`call index -l` (a unique prefix of it is enough)"
         ),
+    )
+    remover.add_argument(
+        "--contact",
+        help="remove every call matching this contact name or phone substring",
     )
     remover.add_argument(
         "--permanent", action="store_true", help="delete outright instead of trashing"
