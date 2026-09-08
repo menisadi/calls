@@ -334,7 +334,6 @@ def cmd_rm(args: argparse.Namespace, config: Config) -> int:
 def cmd_show(args: argparse.Namespace, config: Config) -> int:
     global _COLOR_MODE
     _COLOR_MODE = args.color
-    notify = _reporter(args.quiet)
 
     raw = args.name
     base_name = Path(raw).name.rsplit(".", 1)[0]
@@ -353,10 +352,11 @@ def cmd_show(args: argparse.Namespace, config: Config) -> int:
         _warn(f"{PROGRAM_NAME}: no transcript for '{raw}'")
         return 1
 
-    tag = pipeline.call_tag(base_name, config)
-    notify(_style(base_name, _BOLD, _CYAN))
-    if tag:
-        notify(_style(tag, _YELLOW))
+    if not args.quiet:
+        tag = pipeline.call_tag(base_name, config)
+        print(_style(base_name, _BOLD, _CYAN))
+        if tag:
+            print(_style(tag, _YELLOW))
     print(transcript.read_text(encoding="utf-8"), end="")
     return 0
 
