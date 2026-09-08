@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -21,9 +22,41 @@ from .pipeline import ImportReport
 
 PROGRAM_NAME = "call"
 
+_RESET = "\033[0m"
+_BOLD = "\033[1m"
+_DIM = "\033[2m"
+_CYAN = "\033[36m"
+_YELLOW = "\033[33m"
+_GREEN = "\033[32m"
+_MAGENTA = "\033[35m"
+
+# The snippet() call in index.search() marks matches with these control
+# characters rather than literal brackets, so they can't collide with
+# punctuation that actually appears in a transcript.
+_MATCH_START = "\x01"
+_MATCH_END = "\x02"
+
 
 def _warn(message: str) -> None:
     print(message, file=sys.stderr)
+
+
+def _use_color() -> bool:
+    return sys.stdout.isatty() and "NO_COLOR" not in os.environ
+
+
+def _style(text: str, *codes: str) -> str:
+    if not text or not _use_color():
+        return text
+    return "".join(codes) + text + _RESET
+
+
+def _render_snippet(snippet: str) -> str:
+    text = " ".join(snippet.split())
+    highlight = (_BOLD, _YELLOW) if _use_color() else ()
+    start = "".join(highlight)
+    end = _RESET if highlight else ""
+    return text.replace(_MATCH_START, start).replace(_MATCH_END, end)
 
 
 def _reporter(quiet: bool):
@@ -34,20 +67,29 @@ def _reporter(quiet: bool):
     return notify
 
 
-def _print_rows(rows: list[sqlite3.Row], show_snippet: bool) -> None:
+_ARROW_STYLE = {"in": (_GREEN, _BOLD), "out": (_MAGENTA, _BOLD)}
+
+
+def _print_rows(
+    rows: list[sqlite3.Row], show_snippet: bool, verbose: bool = False
+) -> None:
     if not rows:
         _warn("no matching calls")
         return
     for row in rows:
         arrow = {"in": "<-", "out": "->"}.get(row["direction"], " ?")
+        contact = row["contact"] or row["phone_raw"] or "?"
         print(
-            f"{row['date']} {row['time'][:5]} {arrow} "
-            f"{row['contact'] or row['phone_raw'] or '?'} "
-            f"({format_duration(row['duration_seconds'])})  {row['tag']}"
+            f"{_style(row['date'] + ' ' + row['time'][:5], _DIM)} "
+            f"{_style(arrow, *_ARROW_STYLE.get(row['direction'], (_DIM,)))} "
+            f"{_style(contact, _BOLD, _CYAN)} "
+            f"({format_duration(row['duration_seconds'])})  "
+            f"{_style(row['tag'], _YELLOW)}"
         )
-        print(f"    {row['base']}")
+        if verbose:
+            print(_style(f"    {row['base']}", _DIM))
         if show_snippet and row["snippet"]:
-            print(f"    {' '.join(row['snippet'].split())}")
+            print(f"    {_render_snippet(row['snippet'])}")
 
 
 def _rebuild(config: Config, notify) -> None:
@@ -199,11 +241,17 @@ def cmd_index(args: argparse.Namespace, config: Config) -> int:
 
     if args.search:
         _print_rows(
-            index.search(config, args.search, filters, args.limit), show_snippet=True
+            index.search(config, args.search, filters, args.limit),
+            show_snippet=True,
+            verbose=args.verbose,
         )
         return 0
     if args.list:
-        _print_rows(index.listing(config, filters, args.limit), show_snippet=False)
+        _print_rows(
+            index.listing(config, filters, args.limit),
+            show_snippet=False,
+            verbose=args.verbose,
+        )
         return 0
     _rebuild(config, notify)
     return 0
@@ -401,6 +449,12 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         type=int,
         default=50,
         help="maximum rows to show (default: %(default)s)",
+    )
+    idx.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="also show each call's base name",
     )
     idx.set_defaults(handler=cmd_index)
 

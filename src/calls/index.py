@@ -265,7 +265,7 @@ def search(
     try:
         return connection.execute(
             f"""
-            SELECT calls.*, snippet(search, 3, '[', ']', ' … ', 16) AS snippet
+            SELECT calls.*, snippet(search, 3, char(1), char(2), ' … ', 16) AS snippet
             FROM search
             JOIN calls ON calls.base = search.base
             WHERE {where}

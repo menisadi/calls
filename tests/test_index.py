@@ -108,7 +108,7 @@ class TestSearch:
     def test_returns_a_snippet_marking_the_match(self, archive: Config):
         index.build(archive)
         rows = index.search(archive, "תנור", Filters(), limit=10)
-        assert "[תנור]" in rows[0]["snippet"]
+        assert "\x01תנור\x02" in rows[0]["snippet"]
 
     def test_too_short_a_query_is_refused(self, archive: Config):
         index.build(archive)
