@@ -331,6 +331,36 @@ def cmd_rm(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def cmd_show(args: argparse.Namespace, config: Config) -> int:
+    global _COLOR_MODE
+    _COLOR_MODE = args.color
+    notify = _reporter(args.quiet)
+
+    raw = args.name
+    base_name = Path(raw).name.rsplit(".", 1)[0]
+    if not pipeline.matching_files(base_name, config):
+        matches = _resolve_hash(raw, config)
+        if len(matches) > 1:
+            _warn(f"{PROGRAM_NAME}: '{raw}' matches multiple calls:")
+            for match in matches:
+                _warn(f"  {match}")
+            return 1
+        if matches:
+            base_name = matches[0]
+
+    transcript = config.calls_dir / f"{base_name}.txt"
+    if not transcript.is_file():
+        _warn(f"{PROGRAM_NAME}: no transcript for '{raw}'")
+        return 1
+
+    tag = pipeline.call_tag(base_name, config)
+    notify(_style(base_name, _BOLD, _CYAN))
+    if tag:
+        notify(_style(tag, _YELLOW))
+    print(transcript.read_text(encoding="utf-8"), end="")
+    return 0
+
+
 def _add_lang_options(parser: argparse.ArgumentParser, config: Config) -> None:
     parser.add_argument(
         "-l",
@@ -542,6 +572,32 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         "--no-index", action="store_true", help="skip the index rebuild"
     )
     remover.set_defaults(handler=cmd_rm)
+
+    shower = subparsers.add_parser(
+        "show",
+        parents=[common],
+        help="print a call's transcript",
+        description=(
+            "Print the transcript for one call, resolved the same way `call rm` "
+            "resolves its argument: a base name, any of its files, or a unique "
+            "hash prefix from `call index -l`."
+        ),
+    )
+    shower.add_argument(
+        "name",
+        help=(
+            "call base name, any of its files, or the hash id shown by "
+            "`call index -l` (a unique prefix of it is enough)"
+        ),
+    )
+    shower.add_argument(
+        "-C",
+        "--color",
+        choices=["auto", "always", "never"],
+        default="auto",
+        help="colorize the header (default: %(default)s)",
+    )
+    shower.set_defaults(handler=cmd_show)
 
     return parser
 
