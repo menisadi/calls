@@ -41,7 +41,14 @@ def _warn(message: str) -> None:
     print(message, file=sys.stderr)
 
 
+_COLOR_MODE = "auto"
+
+
 def _use_color() -> bool:
+    if _COLOR_MODE == "always":
+        return True
+    if _COLOR_MODE == "never":
+        return False
     return sys.stdout.isatty() and "NO_COLOR" not in os.environ
 
 
@@ -229,6 +236,8 @@ def cmd_topic(args: argparse.Namespace, config: Config) -> int:
 
 
 def cmd_index(args: argparse.Namespace, config: Config) -> int:
+    global _COLOR_MODE
+    _COLOR_MODE = args.color
     notify = _reporter(args.quiet)
     filters = Filters(
         contact=args.contact,
@@ -427,7 +436,9 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "  call index                          rebuild\n"
             "  call index -s 'תקלה במערכת'          search the transcripts\n"
             "  call index -l --contact 0525252145  list one contact's calls\n"
-            "  call index -l --untagged            find calls with no tag"
+            "  call index -l --untagged            find calls with no tag\n"
+            "  call index -l --color=always | less -RS\n"
+            "                                       page with color, no wrapping"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -455,6 +466,13 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         "--verbose",
         action="store_true",
         help="also show each call's base name",
+    )
+    idx.add_argument(
+        "-C",
+        "--color",
+        choices=["auto", "always", "never"],
+        default="auto",
+        help="colorize output (default: %(default)s; use 'always' with less -R)",
     )
     idx.set_defaults(handler=cmd_index)
 
