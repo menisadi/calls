@@ -4,7 +4,7 @@ import pytest
 
 from calls import index, sidecar
 from calls.config import Config
-from calls.index import ArchiveIndexError, Filters, format_duration
+from calls.index import ArchiveIndexError, Filters, call_hash, format_duration
 from calls.sidecar import Tag
 
 
@@ -176,6 +176,40 @@ class TestListing:
     def test_limit_is_applied(self, archive: Config):
         index.build(archive)
         assert len(index.listing(archive, Filters(), limit=2)) == 2
+
+
+class TestHash:
+    def test_matches_the_row_shown_in_listings(self, archive: Config):
+        index.build(archive)
+        rows = index.listing(archive, Filters(), limit=50)
+        assert all(row["hash"] == call_hash(row["base"]) for row in rows)
+
+    def test_stable_across_rebuilds(self, archive: Config):
+        index.build(archive)
+        before = {
+            row["base"]: row["hash"]
+            for row in index.listing(archive, Filters(), limit=50)
+        }
+        index.build(archive)
+        after = {
+            row["base"]: row["hash"]
+            for row in index.listing(archive, Filters(), limit=50)
+        }
+        assert before == after
+
+    def test_resolve_hash_finds_the_full_hash(self, archive: Config):
+        index.build(archive)
+        base = "[1455]_[1455]_2026-08-30_20-22-21"
+        assert index.resolve_hash(archive, call_hash(base)) == [base]
+
+    def test_resolve_hash_matches_a_unique_prefix(self, archive: Config):
+        index.build(archive)
+        base = "[1455]_[1455]_2026-08-30_20-22-21"
+        assert index.resolve_hash(archive, call_hash(base)[:3]) == [base]
+
+    def test_resolve_hash_finds_nothing_for_an_unknown_prefix(self, archive: Config):
+        index.build(archive)
+        assert index.resolve_hash(archive, "zzzzzzz") == []
 
 
 class TestFormatDuration:

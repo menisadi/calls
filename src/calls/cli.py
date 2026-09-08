@@ -91,7 +91,8 @@ def _print_rows(
             f"{_style(arrow, *_ARROW_STYLE.get(row['direction'], (_DIM,)))} "
             f"{_style(contact, _BOLD, _CYAN)} "
             f"({format_duration(row['duration_seconds'])})  "
-            f"{_style(row['tag'], _YELLOW)}"
+            f"{_style(row['tag'], _YELLOW)}  "
+            f"{_style('#' + row['hash'], _DIM)}"
         )
         if verbose:
             print(_style(f"    {row['base']}", _DIM))
@@ -266,6 +267,14 @@ def cmd_index(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def _resolve_hash(raw: str, config: Config) -> list[str]:
+    """Base names matching `raw` as a hash prefix, or [] if the index can't say."""
+    try:
+        return index.resolve_hash(config, raw)
+    except index.ArchiveIndexError:
+        return []
+
+
 def cmd_rm(args: argparse.Namespace, config: Config) -> int:
     notify = _reporter(args.quiet)
 
@@ -273,6 +282,16 @@ def cmd_rm(args: argparse.Namespace, config: Config) -> int:
     for raw in args.names:
         base_name = Path(raw).name.rsplit(".", 1)[0]
         files = pipeline.matching_files(base_name, config)
+        if not files:
+            matches = _resolve_hash(raw, config)
+            if len(matches) > 1:
+                _warn(f"{PROGRAM_NAME}: '{raw}' matches multiple calls:")
+                for match in matches:
+                    _warn(f"  {match}")
+                return 1
+            if matches:
+                base_name = matches[0]
+                files = pipeline.matching_files(base_name, config)
         if not files:
             _warn(f"{PROGRAM_NAME}: nothing found for '{base_name}'")
             return 1
@@ -486,7 +505,14 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "unless --permanent is given."
         ),
     )
-    remover.add_argument("names", nargs="+", help="call base name, or any of its files")
+    remover.add_argument(
+        "names",
+        nargs="+",
+        help=(
+            "call base name, any of its files, or the hash id shown by "
+            "`call index -l` (a unique prefix of it is enough)"
+        ),
+    )
     remover.add_argument(
         "--permanent", action="store_true", help="delete outright instead of trashing"
     )

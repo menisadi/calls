@@ -14,6 +14,7 @@ at least 3 characters per query term.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -27,9 +28,15 @@ from .sidecar import Tag, normalize_phone, read
 # Trigram indexing cannot answer a query shorter than one trigram.
 MIN_SEARCH_LENGTH = 3
 
+# A short, deterministic stand-in for `base` so `call rm` doesn't need the
+# whole recorder filename. Derived from `base` itself (not a rowid), so it is
+# stable across rebuilds regardless of insertion order or archive changes.
+HASH_LENGTH = 7
+
 SCHEMA = """
 CREATE TABLE calls (
     base             TEXT PRIMARY KEY,
+    hash             TEXT NOT NULL,
     contact          TEXT NOT NULL DEFAULT '',
     phone            TEXT,
     phone_raw        TEXT,
@@ -52,6 +59,7 @@ CREATE TABLE calls (
 CREATE INDEX calls_date ON calls(date DESC);
 CREATE INDEX calls_phone ON calls(phone);
 CREATE INDEX calls_contact ON calls(contact);
+CREATE INDEX calls_hash ON calls(hash);
 
 CREATE VIRTUAL TABLE search USING fts5(
     base UNINDEXED,
@@ -64,11 +72,11 @@ CREATE VIRTUAL TABLE search USING fts5(
 
 INSERT_CALL = """
 INSERT INTO calls (
-    base, contact, phone, phone_raw, direction, started_at, date, time,
+    base, hash, contact, phone, phone_raw, direction, started_at, date, time,
     duration_seconds, channels, tag, tag_general, tag_specific,
     scribe_status, scribe_words, topic_status, recording, transcript, path
 ) VALUES (
-    :base, :contact, :phone, :phone_raw, :direction, :started_at, :date, :time,
+    :base, :hash, :contact, :phone, :phone_raw, :direction, :started_at, :date, :time,
     :duration_seconds, :channels, :tag, :tag_general, :tag_specific,
     :scribe_status, :scribe_words, :topic_status, :recording, :transcript, :path
 )
@@ -77,6 +85,11 @@ INSERT INTO calls (
 
 class ArchiveIndexError(Exception):
     """The index cannot be built or read."""
+
+
+def call_hash(base: str) -> str:
+    """A short id for `base`, for typing instead of the full recorder filename."""
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:HASH_LENGTH]
 
 
 @dataclass
@@ -155,6 +168,7 @@ def _row_from_sidecar(sidecar_path: Path) -> dict[str, Any] | None:
 
     return {
         "base": data["base"],
+        "hash": call_hash(data["base"]),
         "contact": data.get("contact") or "",
         "phone": data.get("phone"),
         "phone_raw": data.get("phone_raw"),
@@ -290,6 +304,18 @@ def listing(config: Config, filters: Filters, limit: int = 50) -> list[sqlite3.R
             "ORDER BY calls.date DESC, calls.time DESC LIMIT ?",
             [*params, limit],
         ).fetchall()
+    finally:
+        connection.close()
+
+
+def resolve_hash(config: Config, prefix: str) -> list[str]:
+    """Base names whose hash starts with `prefix`, git-abbrev style."""
+    connection = connect(config.db_path)
+    try:
+        rows = connection.execute(
+            "SELECT base FROM calls WHERE hash LIKE ? ORDER BY base", (f"{prefix}%",)
+        ).fetchall()
+        return [row["base"] for row in rows]
     finally:
         connection.close()
 

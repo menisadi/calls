@@ -8,7 +8,7 @@ call import                          # copy new recordings, then finish what's o
 call index -s 'תקלה במערכת'           # full-text search the transcripts
 call index -l --contact 0525252145   # list one contact's calls
 call index -l --untagged             # find calls that never got tagged
-call rm '[1455]_[1455]_2026-08-30_20-22-21'
+call rm a1b2c3d                      # remove by the hash id shown in `call index -l`
 ```
 
 ## How the archive is laid out
