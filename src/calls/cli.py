@@ -236,6 +236,42 @@ def cmd_topic(args: argparse.Namespace, config: Config) -> int:
     return 1 if failures else 0
 
 
+def _resolve_hash(raw: str, config: Config) -> list[str]:
+    """Base names matching `raw` as a hash prefix, or [] if the index can't say."""
+    try:
+        return index.resolve_hash(config, raw)
+    except index.ArchiveIndexError:
+        return []
+
+
+def _resolve_recording(raw: str, config: Config) -> Path | None:
+    """A transcript/sidecar/recording path, or a hash prefix from `call index -l`.
+
+    Shared by translate/summarize, and resolves the same way `call rm`/`call
+    show` do: `raw` as a path first, then as a hash prefix. Returns None
+    (having already warned) only when `raw` looks like a hash and matches
+    more than one call; a path that simply doesn't exist yet is still
+    returned as-is, so the caller's own "no transcript for X" error names the
+    right call instead of a resolver-internal one.
+    """
+    resolved = sidecar.resolve_input(raw, config)
+    if resolved.is_file():
+        return resolved
+    matches = _resolve_hash(raw, config)
+    if len(matches) > 1:
+        _warn(f"{PROGRAM_NAME}: '{raw}' matches multiple calls:")
+        for match in matches:
+            _warn(f"  {match}")
+        return None
+    if matches:
+        found = sidecar.find_recording(
+            config.calls_dir / matches[0], config.audio_suffixes
+        )
+        if found is not None:
+            return found
+    return resolved
+
+
 def _contact_recordings(contact: str, config: Config) -> list[Path]:
     """Every recording matching a --contact filter, resolved to its audio file.
 
@@ -260,7 +296,12 @@ def cmd_translate(args: argparse.Namespace, config: Config) -> int:
 
     notify = _reporter(args.quiet)
 
-    recordings = [sidecar.resolve_input(raw, config) for raw in args.inputs]
+    recordings = []
+    for raw in args.inputs:
+        resolved = _resolve_recording(raw, config)
+        if resolved is None:
+            return 1
+        recordings.append(resolved)
     if args.last:
         recordings.extend(sidecar.all_recordings(config)[-1:])
     if args.untranslated:
@@ -316,7 +357,12 @@ def cmd_summarize(args: argparse.Namespace, config: Config) -> int:
 
     notify = _reporter(args.quiet)
 
-    recordings = [sidecar.resolve_input(raw, config) for raw in args.inputs]
+    recordings = []
+    for raw in args.inputs:
+        resolved = _resolve_recording(raw, config)
+        if resolved is None:
+            return 1
+        recordings.append(resolved)
     if args.last:
         recordings.extend(sidecar.all_recordings(config)[-1:])
     if args.unsummarized:
@@ -397,14 +443,6 @@ def cmd_index(args: argparse.Namespace, config: Config) -> int:
         return 0
     _rebuild(config, notify)
     return 0
-
-
-def _resolve_hash(raw: str, config: Config) -> list[str]:
-    """Base names matching `raw` as a hash prefix, or [] if the index can't say."""
-    try:
-        return index.resolve_hash(config, raw)
-    except index.ArchiveIndexError:
-        return []
 
 
 def cmd_rm(args: argparse.Namespace, config: Config) -> int:
@@ -645,7 +683,14 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "model, writing it as '<base>.en.txt' next to the transcript."
         ),
     )
-    translator.add_argument("inputs", nargs="*", help="transcript or recording path")
+    translator.add_argument(
+        "inputs",
+        nargs="*",
+        help=(
+            "transcript or recording path, or the hash id shown by "
+            "`call index -l` (a unique prefix of it is enough)"
+        ),
+    )
     translator.add_argument(
         "--last", action="store_true", help="use the newest recording in the archive"
     )
@@ -682,7 +727,14 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "version."
         ),
     )
-    summarizer.add_argument("inputs", nargs="*", help="transcript or recording path")
+    summarizer.add_argument(
+        "inputs",
+        nargs="*",
+        help=(
+            "transcript or recording path, or the hash id shown by "
+            "`call index -l` (a unique prefix of it is enough)"
+        ),
+    )
     summarizer.add_argument(
         "--last", action="store_true", help="use the newest recording in the archive"
     )
