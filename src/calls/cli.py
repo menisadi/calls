@@ -236,6 +236,55 @@ def cmd_topic(args: argparse.Namespace, config: Config) -> int:
     return 1 if failures else 0
 
 
+def cmd_translate(args: argparse.Namespace, config: Config) -> int:
+    from .translate import Translator
+
+    notify = _reporter(args.quiet)
+
+    recordings = [sidecar.resolve_input(raw, config) for raw in args.inputs]
+    if args.last:
+        recordings.extend(sidecar.all_recordings(config)[-1:])
+    if args.untranslated:
+        recordings.extend(
+            recording
+            for recording in sidecar.all_recordings(config)
+            if sidecar.stage_status(
+                sidecar.read(sidecar.sidecar_path_for(recording)), "translate"
+            )
+            != "ok"
+        )
+    if not recordings:
+        _warn(
+            f"{PROGRAM_NAME} translate: give a transcript, or --last / --untranslated"
+        )
+        return 1
+
+    notify(f"loading model: {args.model or config.model_translate}")
+    translator = Translator.load(config, args.model)
+
+    failures = 0
+    for recording in recordings:
+        transcript = recording.with_suffix(".txt")
+        if not transcript.is_file():
+            _warn(f"{PROGRAM_NAME}: no transcript for {recording.name}")
+            failures += 1
+            continue
+        notify(f"{recording.stem}: translating")
+        text = translator.translate(transcript.read_text(encoding="utf-8"))
+        if not text:
+            _warn(f"{PROGRAM_NAME}: model produced no output for {transcript.name}")
+            failures += 1
+            continue
+        if args.dry_run:
+            print(text)
+            continue
+        sidecar.record_translation(recording, text, translator.model_path)
+        notify(
+            f"{recording.stem}: wrote {sidecar.translation_path_for(recording).name}"
+        )
+    return 1 if failures else 0
+
+
 def cmd_index(args: argparse.Namespace, config: Config) -> int:
     global _COLOR_MODE
     _COLOR_MODE = args.color
@@ -348,16 +397,30 @@ def cmd_show(args: argparse.Namespace, config: Config) -> int:
             base_name = matches[0]
 
     transcript = config.calls_dir / f"{base_name}.txt"
-    if not transcript.is_file():
-        _warn(f"{PROGRAM_NAME}: no transcript for '{raw}'")
+    translation = config.calls_dir / f"{base_name}.en.txt"
+
+    # "auto" prefers the English translation - the whole point of translating
+    # is to make a call easier to read - but only where one actually exists,
+    # so most of the archive (nothing translated yet) is unaffected.
+    if args.lang == "en" or (args.lang == "auto" and translation.is_file()):
+        path, showing_en = translation, True
+    else:
+        path, showing_en = transcript, False
+
+    if not path.is_file():
+        kind = "translation" if showing_en else "transcript"
+        _warn(f"{PROGRAM_NAME}: no {kind} for '{raw}'")
         return 1
 
     if not args.quiet:
         tag = pipeline.call_tag(base_name, config)
-        print(_style(base_name, _BOLD, _CYAN))
+        header = _style(base_name, _BOLD, _CYAN)
+        if showing_en:
+            header += _style(" [en]", _DIM)
+        print(header)
         if tag:
             print(_style(tag, _YELLOW))
-    print(transcript.read_text(encoding="utf-8"), end="")
+    print(path.read_text(encoding="utf-8"), end="")
     return 0
 
 
@@ -387,8 +450,12 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             f"(default: {config.scribe_command})\n"
             "  CALLS_MODEL_HE       MLX model for --lang he\n"
             "  CALLS_MODEL_EN       MLX model for --lang en\n"
+            "  CALLS_MODEL_TRANSLATE  MLX model for `translate` "
+            f"(default: CALLS_MODEL_HE)\n"
             f"  CALLS_LANG           Default language (default: {config.lang})\n"
             f"  CALLS_MAX_TOKENS     Generation budget (default: {config.max_tokens})\n"
+            "  CALLS_TRANSLATE_MAX_TOKENS  Translation generation ceiling "
+            f"(default: {config.translate_max_tokens})\n"
             f"  CALLS_COUNTRY_CODE   Country code for local numbers "
             f"(default: {config.country_code})"
         ),
@@ -481,6 +548,34 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
     )
     _add_lang_options(topic, config)
     topic.set_defaults(handler=cmd_topic)
+
+    translator = subparsers.add_parser(
+        "translate",
+        parents=[common],
+        help="translate a transcript to English",
+        description=(
+            "Translate a Hebrew call transcript to English with a local "
+            "model, writing it as '<base>.en.txt' next to the transcript."
+        ),
+    )
+    translator.add_argument("inputs", nargs="*", help="transcript or recording path")
+    translator.add_argument(
+        "--last", action="store_true", help="use the newest recording in the archive"
+    )
+    translator.add_argument(
+        "--untranslated",
+        action="store_true",
+        help="translate every call with no English translation yet",
+    )
+    translator.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the translation without writing it",
+    )
+    translator.add_argument(
+        "-m", "--model", help="MLX model to use (overrides the default)"
+    )
+    translator.set_defaults(handler=cmd_translate)
 
     idx = subparsers.add_parser(
         "index",
@@ -580,7 +675,9 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         description=(
             "Print the transcript for one call, resolved the same way `call rm` "
             "resolves its argument: a base name, any of its files, or a unique "
-            "hash prefix from `call index -l`."
+            "hash prefix from `call index -l`. Prints the English translation "
+            "instead of the Hebrew transcript when one exists, unless --lang "
+            "says otherwise."
         ),
     )
     shower.add_argument(
@@ -588,6 +685,16 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         help=(
             "call base name, any of its files, or the hash id shown by "
             "`call index -l` (a unique prefix of it is enough)"
+        ),
+    )
+    shower.add_argument(
+        "-l",
+        "--lang",
+        choices=["auto", "he", "en"],
+        default="auto",
+        help=(
+            "which version to print: auto prefers the English translation "
+            "if one exists (default: %(default)s)"
         ),
     )
     shower.add_argument(

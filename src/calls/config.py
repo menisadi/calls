@@ -41,8 +41,10 @@ class Config:
     scribe_command: str
     model_he: str
     model_en: str
+    model_translate: str
     lang: str
     max_tokens: int
+    translate_max_tokens: int
     country_code: str
     audio_suffixes: tuple[str, ...] = field(default=AUDIO_SUFFIXES)
 
@@ -50,6 +52,10 @@ class Config:
     def from_env(cls) -> Config:
         home = Path.home()
         calls_dir = _path_env("CALLS_DIR", home / "Recordings" / "calls")
+        model_he = os.environ.get(
+            "CALLS_MODEL_HE",
+            str(home / ".local/share/mlx/DictaLM-3.0-1.7B-Instruct-bf16"),
+        )
         return cls(
             calls_dir=calls_dir,
             # Originals are left in place by `call import`, so for a recording
@@ -63,15 +69,24 @@ class Config:
             # ffmpeg/whisper-cli pipeline, and is useful on arbitrary audio
             # with no knowledge of this archive.
             scribe_command=os.environ.get("CALLS_SCRIBE", "callscribe"),
-            model_he=os.environ.get(
-                "CALLS_MODEL_HE",
-                str(home / ".local/share/mlx/DictaLM-3.0-1.7B-Instruct-bf16"),
-            ),
+            model_he=model_he,
             model_en=os.environ.get(
                 "CALLS_MODEL_EN", "mlx-community/Qwen3-4B-4bit-DWQ-053125"
             ),
+            # Hebrew-to-English translation defaults to the same model as
+            # Hebrew tagging: DictaLM's Hebrew tuning produced more faithful
+            # translations than Qwen3-4B in testing (e.g. it didn't mistake
+            # "brownies" for "bronzes").
+            model_translate=os.environ.get("CALLS_MODEL_TRANSLATE", model_he),
             lang=os.environ.get("CALLS_LANG", "he"),
             max_tokens=int(os.environ.get("CALLS_MAX_TOKENS", "300")),
+            # A ceiling, not a target: generation stops at the model's own end
+            # token well before this in practice. It exists so a long call's
+            # translation isn't silently truncated mid-sentence by a budget
+            # sized for a short one - see translate.py's per-call scaling.
+            translate_max_tokens=int(
+                os.environ.get("CALLS_TRANSLATE_MAX_TOKENS", "8000")
+            ),
             country_code=os.environ.get("CALLS_COUNTRY_CODE", DEFAULT_COUNTRY_CODE),
         )
 

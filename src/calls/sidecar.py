@@ -208,6 +208,10 @@ def sidecar_path_for(recording: Path) -> Path:
     return recording.with_suffix(".json")
 
 
+def translation_path_for(recording: Path) -> Path:
+    return recording.with_suffix(".en.txt")
+
+
 def read(sidecar_path: Path) -> dict[str, Any]:
     """The sidecar as raw JSON, or an empty dict if there isn't one."""
     if not sidecar_path.is_file():
@@ -346,6 +350,23 @@ def refresh(
     )
     stages["topic"] = topic
 
+    # Mirrors the scribe stage: derived from the file on disk, so a deleted or
+    # regenerated translation is reflected without re-running anything.
+    # record_translation()'s "model" and "at" survive untouched, since only
+    # "status" and "words" are set here.
+    translation = translation_path_for(recording)
+    translate = dict(stages.get("translate") or {})
+    if translation.is_file() and translation.stat().st_size > 0:
+        words = len(translation.read_text(encoding="utf-8").split())
+        translate["status"] = "ok" if words else "empty"
+        translate["words"] = words
+        sidecar["transcript_en"] = translation.name
+    else:
+        translate["status"] = "missing"
+        translate.pop("words", None)
+        sidecar["transcript_en"] = None
+    stages["translate"] = translate
+
     sidecar["stages"] = stages
     return sidecar
 
@@ -378,6 +399,52 @@ def record_tag(recording: Path, tag: Tag, model: str, lang: str) -> dict[str, An
         "at": now_stamp(),
         "model": model,
         "lang": lang,
+    }
+    sidecar["stages"] = stages
+
+    write(path, sidecar)
+    return sidecar
+
+
+def record_translation(recording: Path, text: str, model: str) -> dict[str, Any]:
+    """Write the English translation next to the transcript, and record it.
+
+    Mirrors record_tag: only the fields this step owns are written, and a
+    missing sidecar is created from the filename so translate can run before
+    or after scribe/topic without clobbering their work.
+    """
+    translation = translation_path_for(recording)
+    translation.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temp_name = tempfile.mkstemp(
+        dir=str(translation.parent), prefix=f".{translation.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temp_name, translation)
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
+
+    path = sidecar_path_for(recording)
+    sidecar = read(path)
+    sidecar.setdefault("schema", SCHEMA_VERSION)
+    sidecar.setdefault("base", recording.stem)
+
+    parsed = CallName.parse(recording.stem)
+    if parsed is not None:
+        sidecar.setdefault("contact", parsed.contact)
+        sidecar.setdefault("phone_raw", parsed.phone_raw)
+        sidecar.setdefault("date", parsed.date)
+        sidecar.setdefault("time", parsed.time)
+
+    sidecar["transcript_en"] = translation.name
+
+    stages = dict(sidecar.get("stages") or {})
+    stages["translate"] = {
+        "status": "ok",
+        "at": now_stamp(),
+        "model": model,
     }
     sidecar["stages"] = stages
 

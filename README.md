@@ -1,13 +1,15 @@
 # calls
 
 A CLI for a phone call recording archive: import recordings off the phone,
-transcribe them, tag them by topic with a local model, and search them.
+transcribe them, tag them by topic with a local model, translate them to
+English, and search them.
 
 ```
 call import                          # copy new recordings, then finish what's outstanding
 call index -s 'תקלה במערכת'           # full-text search the transcripts
 call index -l --contact 0525252145   # list one contact's calls
 call index -l --untagged             # find calls that never got tagged
+call translate --untranslated        # translate every Hebrew call to English
 call rm a1b2c3d                      # remove by the hash id shown in `call index -l`
 ```
 
@@ -18,9 +20,10 @@ Two layers, and the split is the whole design:
 **Files are the source of truth.** Each call is three files sharing a base name:
 
 ```
-[Contact]_[Phone]_2026-08-27_14-44-31.opus   the recording
-[Contact]_[Phone]_2026-08-27_14-44-31.txt    the transcript
-[Contact]_[Phone]_2026-08-27_14-44-31.json   the sidecar
+[Contact]_[Phone]_2026-08-27_14-44-31.opus     the recording
+[Contact]_[Phone]_2026-08-27_14-44-31.txt      the transcript
+[Contact]_[Phone]_2026-08-27_14-44-31.en.txt   the English translation (optional)
+[Contact]_[Phone]_2026-08-27_14-44-31.json     the sidecar
 ```
 
 The sidecar holds contact, phone (as recorded plus an E.164-normalized form),
@@ -116,12 +119,25 @@ Every path and model is an environment variable:
 | `CALLS_SCRIBE` | `callscribe` |
 | `CALLS_MODEL_HE` | `~/.local/share/mlx/DictaLM-3.0-1.7B-Instruct-bf16` |
 | `CALLS_MODEL_EN` | `mlx-community/Qwen3-4B-4bit-DWQ-053125` |
+| `CALLS_MODEL_TRANSLATE` | same as `CALLS_MODEL_HE` |
 | `CALLS_LANG` | `he` |
 | `CALLS_MAX_TOKENS` | `300` |
+| `CALLS_TRANSLATE_MAX_TOKENS` | `8000` |
 | `CALLS_COUNTRY_CODE` | `972` |
 
 Use `-l en` for mostly-English transcripts: DictaLM is Hebrew-tuned and gives
 weaker, more generic tags on English-heavy content.
+
+`call translate` is a separate command, not a stage of `call import`: unlike
+transcription and tagging, not every call needs an English copy, so it isn't
+run automatically. DictaLM is the default translator too - in testing it was
+more faithful to specifics (foreign loanwords, mid-sentence topic shifts) than
+Qwen3-4B, despite being the smaller model.
+
+`call show` (and anything built on it, like an fzf browser) prints the English
+translation instead of the Hebrew transcript whenever one exists - `-l he`
+forces the original. This only changes behaviour for calls translated on
+purpose, since nothing is translated automatically.
 
 ## Development
 

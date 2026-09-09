@@ -214,6 +214,39 @@ class TestRefresh:
         )
         assert with_tag["stages"]["topic"]["status"] == "ok"
 
+    def test_translation_present_makes_the_translate_stage_ok(
+        self, config: Config, make_call
+    ):
+        recording = make_call(HEBREW_BASE, transcript="text")
+        sidecar.translation_path_for(recording).write_text(
+            "one two three", encoding="utf-8"
+        )
+        data = sidecar.refresh(recording, config)
+        assert data["stages"]["translate"]["status"] == "ok"
+        assert data["stages"]["translate"]["words"] == 3
+        assert data["transcript_en"] == f"{HEBREW_BASE}.en.txt"
+
+    def test_no_translation_leaves_the_translate_stage_missing(
+        self, config: Config, make_call
+    ):
+        recording = make_call(HEBREW_BASE, transcript="text")
+        data = sidecar.refresh(recording, config)
+        assert data["stages"]["translate"]["status"] == "missing"
+        assert "words" not in data["stages"]["translate"]
+        assert data["transcript_en"] is None
+
+    def test_a_translation_that_disappears_downgrades_the_stage(
+        self, config: Config, make_call
+    ):
+        recording = make_call(HEBREW_BASE, transcript="text")
+        sidecar.translation_path_for(recording).write_text("hi", encoding="utf-8")
+        first = sidecar.refresh(recording, config)
+        assert first["stages"]["translate"]["status"] == "ok"
+
+        sidecar.translation_path_for(recording).unlink()
+        second = sidecar.refresh(recording, config, existing=first)
+        assert second["stages"]["translate"]["status"] == "missing"
+
     def test_preserves_the_tag_and_unknown_keys(self, config: Config, make_call):
         recording = make_call(HEBREW_BASE, transcript="text")
         existing = {
@@ -322,6 +355,55 @@ class TestRecordTag:
 
         assert json.loads(path.read_text(encoding="utf-8"))["tag"]["general"] == "תקלה"
         assert data["stages"]["topic"]["status"] == "ok"
+
+
+class TestRecordTranslation:
+    def test_writes_the_translation_and_its_provenance(self, config: Config, make_call):
+        recording = make_call(HEBREW_BASE, transcript="שלום")
+        sidecar.write(
+            sidecar.sidecar_path_for(recording), sidecar.refresh(recording, config)
+        )
+
+        data = sidecar.record_translation(recording, "Hello", "model-translate")
+
+        translation = sidecar.translation_path_for(recording)
+        assert translation.read_text(encoding="utf-8") == "Hello"
+        assert data["transcript_en"] == translation.name
+        assert data["stages"]["translate"]["status"] == "ok"
+        assert data["stages"]["translate"]["model"] == "model-translate"
+
+    def test_does_not_clobber_fields_owned_by_refresh(self, config: Config, make_call):
+        recording = make_call(HEBREW_BASE, transcript="one two")
+        refreshed = sidecar.refresh(recording, config, direction="in")
+        sidecar.write(sidecar.sidecar_path_for(recording), refreshed)
+
+        data = sidecar.record_translation(recording, "one two", "model-translate")
+
+        assert data["direction"] == "in"
+        assert data["phone"] == "+972547602488"
+        assert data["stages"]["scribe"]["words"] == 2
+
+    def test_creates_a_minimal_sidecar_when_none_exists(
+        self, config: Config, make_call
+    ):
+        recording = make_call(HEBREW_BASE, transcript="text")
+        data = sidecar.record_translation(recording, "text", "model-translate")
+        assert data["base"] == HEBREW_BASE
+        assert data["contact"] == "דור אקוקה"
+        assert data["date"] == "2026-08-19"
+
+    def test_a_later_refresh_keeps_the_model_provenance(
+        self, config: Config, make_call
+    ):
+        recording = make_call(HEBREW_BASE, transcript="text")
+        sidecar.record_translation(recording, "text", "model-translate")
+        path = sidecar.sidecar_path_for(recording)
+
+        data = sidecar.refresh(recording, config)
+        sidecar.write(path, data)
+
+        assert data["stages"]["translate"]["status"] == "ok"
+        assert data["stages"]["translate"]["model"] == "model-translate"
 
 
 class TestResolveInput:

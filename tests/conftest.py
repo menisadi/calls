@@ -28,8 +28,10 @@ def config(tmp_path: Path) -> Config:
         scribe_command="callscribe-not-installed",
         model_he="model-he",
         model_en="model-en",
+        model_translate="model-translate",
         lang="he",
         max_tokens=300,
+        translate_max_tokens=8000,
         country_code="972",
         audio_suffixes=AUDIO_SUFFIXES,
     )
