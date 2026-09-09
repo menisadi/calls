@@ -325,6 +325,13 @@ def cmd_translate(args: argparse.Namespace, config: Config) -> int:
             "--last / --untranslated / --contact"
         )
         return 1
+    if args.list:
+        for recording in recordings:
+            status = sidecar.stage_status(
+                sidecar.read(sidecar.sidecar_path_for(recording)), "translate"
+            )
+            print(f"{recording.stem}  [translate: {status}]")
+        return 0
 
     notify(f"loading model: {args.model or config.model_translate}")
     translator = Translator.load(config, args.model)
@@ -386,6 +393,13 @@ def cmd_summarize(args: argparse.Namespace, config: Config) -> int:
             "--last / --unsummarized / --contact"
         )
         return 1
+    if args.list:
+        for recording in recordings:
+            status = sidecar.stage_status(
+                sidecar.read(sidecar.sidecar_path_for(recording)), "summarize"
+            )
+            print(f"{recording.stem}  [summarize: {status}]")
+        return 0
 
     notify(f"loading model: {args.model or config.model_summarize}")
     summarizer = Summarizer.load(config, args.model)
@@ -709,7 +723,18 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
     translator.add_argument(
         "--dry-run",
         action="store_true",
-        help="print the translation without writing it",
+        help=(
+            "generate the translation - same cost as a real run - and print "
+            "it instead of writing it"
+        ),
+    )
+    translator.add_argument(
+        "--list",
+        action="store_true",
+        help=(
+            "print which calls would be translated and their current "
+            "status, without loading the model"
+        ),
     )
     translator.add_argument(
         "-m", "--model", help="MLX model to use (overrides the default)"
@@ -751,7 +776,20 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         ),
     )
     summarizer.add_argument(
-        "--dry-run", action="store_true", help="print the summary without writing it"
+        "--dry-run",
+        action="store_true",
+        help=(
+            "generate the summary - same cost as a real run - and print it "
+            "instead of writing it"
+        ),
+    )
+    summarizer.add_argument(
+        "--list",
+        action="store_true",
+        help=(
+            "print which calls would be summarized and their current "
+            "status, without loading the model"
+        ),
     )
     summarizer.add_argument(
         "-m", "--model", help="MLX model to use (overrides the default)"
