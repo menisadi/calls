@@ -304,7 +304,22 @@ def cmd_translate(args: argparse.Namespace, config: Config) -> int:
         recordings.append(resolved)
     if args.last:
         recordings.extend(sidecar.all_recordings(config)[-1:])
-    if args.untranslated:
+    if args.contact:
+        matches = _contact_recordings(args.contact, config)
+        if not matches:
+            _warn(f"{PROGRAM_NAME}: no calls match contact '{args.contact}'")
+            return 1
+        if args.untranslated:
+            matches = [
+                recording
+                for recording in matches
+                if sidecar.stage_status(
+                    sidecar.read(sidecar.sidecar_path_for(recording)), "translate"
+                )
+                != "ok"
+            ]
+        recordings.extend(matches)
+    elif args.untranslated:
         recordings.extend(
             recording
             for recording in sidecar.all_recordings(config)
@@ -313,12 +328,6 @@ def cmd_translate(args: argparse.Namespace, config: Config) -> int:
             )
             != "ok"
         )
-    if args.contact:
-        matches = _contact_recordings(args.contact, config)
-        if not matches:
-            _warn(f"{PROGRAM_NAME}: no calls match contact '{args.contact}'")
-            return 1
-        recordings.extend(matches)
     if not recordings:
         _warn(
             f"{PROGRAM_NAME} translate: give a transcript, or "
@@ -372,7 +381,22 @@ def cmd_summarize(args: argparse.Namespace, config: Config) -> int:
         recordings.append(resolved)
     if args.last:
         recordings.extend(sidecar.all_recordings(config)[-1:])
-    if args.unsummarized:
+    if args.contact:
+        matches = _contact_recordings(args.contact, config)
+        if not matches:
+            _warn(f"{PROGRAM_NAME}: no calls match contact '{args.contact}'")
+            return 1
+        if args.unsummarized:
+            matches = [
+                recording
+                for recording in matches
+                if sidecar.stage_status(
+                    sidecar.read(sidecar.sidecar_path_for(recording)), "summarize"
+                )
+                != "ok"
+            ]
+        recordings.extend(matches)
+    elif args.unsummarized:
         recordings.extend(
             recording
             for recording in sidecar.all_recordings(config)
@@ -381,12 +405,6 @@ def cmd_summarize(args: argparse.Namespace, config: Config) -> int:
             )
             != "ok"
         )
-    if args.contact:
-        matches = _contact_recordings(args.contact, config)
-        if not matches:
-            _warn(f"{PROGRAM_NAME}: no calls match contact '{args.contact}'")
-            return 1
-        recordings.extend(matches)
     if not recordings:
         _warn(
             f"{PROGRAM_NAME} summarize: give a transcript, or "
@@ -717,7 +735,8 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         "--contact",
         help=(
             "translate every call matching this contact name or phone "
-            "substring, regardless of whether it's already translated"
+            "substring, regardless of whether it's already translated "
+            "(combine with --untranslated to only pick up its pending calls)"
         ),
     )
     translator.add_argument(
@@ -772,7 +791,8 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         "--contact",
         help=(
             "summarize every call matching this contact name or phone "
-            "substring, regardless of whether it's already summarized"
+            "substring, regardless of whether it's already summarized "
+            "(combine with --unsummarized to only pick up its pending calls)"
         ),
     )
     summarizer.add_argument(
