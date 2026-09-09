@@ -419,6 +419,42 @@ class TestRecordTranslation:
         assert data["stages"]["translate"]["model"] == "model-translate"
 
 
+class TestRecordRecordingRemoved:
+    def test_clears_the_recording_field(self, config: Config, make_call):
+        recording = make_call(HEBREW_BASE, transcript="שלום")
+        sidecar.write(
+            sidecar.sidecar_path_for(recording), sidecar.refresh(recording, config)
+        )
+
+        data = sidecar.record_recording_removed(recording)
+
+        assert data["recording"] is None
+        assert data["stages"]["recording"]["status"] == "removed"
+
+    def test_leaves_everything_else_alone(self, config: Config, make_call):
+        recording = make_call(HEBREW_BASE, transcript="שלום")
+        refreshed = sidecar.refresh(recording, config, direction="in")
+        sidecar.write(sidecar.sidecar_path_for(recording), refreshed)
+        sidecar.record_tag(recording, Tag(general="x"), "model-he", "he")
+
+        data = sidecar.record_recording_removed(recording)
+
+        assert data["direction"] == "in"
+        assert data["phone"] == "+972547602488"
+        assert data["tag"]["general"] == "x"
+        assert data["stages"]["scribe"]["words"] == 1
+
+    def test_works_even_after_the_file_is_already_gone(self, config: Config, make_call):
+        recording = make_call(HEBREW_BASE, transcript="שלום")
+        sidecar.write(
+            sidecar.sidecar_path_for(recording), sidecar.refresh(recording, config)
+        )
+        recording.unlink()
+
+        data = sidecar.record_recording_removed(recording)
+        assert data["recording"] is None
+
+
 class TestRecordSummary:
     def test_writes_the_summary_and_its_provenance(self, config: Config, make_call):
         recording = make_call(HEBREW_BASE, transcript="שלום")

@@ -13,6 +13,7 @@ import json
 import os
 import sqlite3
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 from . import index, pipeline, sidecar
@@ -481,18 +482,32 @@ def cmd_rm(args: argparse.Namespace, config: Config) -> int:
     notify = _reporter(args.quiet)
 
     names = list(args.names)
-    if args.contact:
-        filters = Filters(contact=args.contact, country_code=config.country_code)
+    # A filter-based selection can match many calls at once, so it gets one
+    # confirmation for the whole batch below rather than the per-call prompt
+    # that fits a short, explicit list of names.
+    bulk = bool(args.contact or args.since or args.until or args.older_than is not None)
+    if bulk:
+        until = args.until
+        if args.older_than is not None:
+            until = (date.today() - timedelta(days=args.older_than)).isoformat()
+        filters = Filters(
+            contact=args.contact,
+            since=args.since,
+            until=until,
+            country_code=config.country_code,
+        )
         matches = index.listing(config, filters, limit=sys.maxsize)
         if not matches:
-            _warn(f"{PROGRAM_NAME}: no calls match contact '{args.contact}'")
+            _warn(f"{PROGRAM_NAME}: no calls match the given filters")
             return 1
         names.extend(row["base"] for row in matches)
     if not names:
         _warn(f"{PROGRAM_NAME}: nothing to remove")
         return 1
 
-    removed = 0
+    # Resolve every name to its files up front, so a batch confirmation can
+    # show the whole plan before anything is touched.
+    plan: list[tuple[str, list[Path]]] = []
     for raw in names:
         base_name = Path(raw).name.rsplit(".", 1)[0]
         files = pipeline.matching_files(base_name, config)
@@ -510,6 +525,18 @@ def cmd_rm(args: argparse.Namespace, config: Config) -> int:
             _warn(f"{PROGRAM_NAME}: nothing found for '{base_name}'")
             return 1
 
+        if args.recording_only:
+            files = [p for p in files if p.suffix.lower() in config.audio_suffixes]
+            if not files:
+                notify(f"{base_name}: no recording file (already removed?)")
+                continue
+
+        plan.append((base_name, files))
+
+    if not plan:
+        return 0
+
+    for base_name, files in plan:
         tag = pipeline.call_tag(base_name, config)
         notify(f"{base_name}:")
         if tag:
@@ -517,14 +544,26 @@ def cmd_rm(args: argparse.Namespace, config: Config) -> int:
         for path in files:
             notify(f"  file:  {path}")
 
-        if args.dry_run:
-            continue
-        if not args.force:
-            reply = input("Remove the above? [y/N] ").strip().lower()
+    if args.dry_run:
+        return 0
+
+    if not args.force and bulk:
+        reply = input(f"Remove the above {len(plan)} call(s)? [y/N] ").strip().lower()
+        if reply != "y":
+            notify("skipped")
+            return 0
+
+    removed = 0
+    for base_name, files in plan:
+        if not args.force and not bulk:
+            reply = input(f"Remove {base_name}? [y/N] ").strip().lower()
             if reply != "y":
                 notify(f"skipped {base_name}")
                 continue
         pipeline.remove(files, args.permanent)
+        if args.recording_only:
+            for path in files:
+                sidecar.record_recording_removed(path)
         notify(f"removed {base_name}")
         removed += 1
 
@@ -878,7 +917,8 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         description=(
             "Remove a call's recording, transcript, .srt (if any) and sidecar "
             "together, then rebuild the index. Files are moved to the trash "
-            "unless --permanent is given."
+            "unless --permanent is given. --recording-only deletes just the "
+            "audio, keeping the transcript, translation, summary and tag."
         ),
     )
     remover.add_argument(
@@ -892,6 +932,20 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
     remover.add_argument(
         "--contact",
         help="remove every call matching this contact name or phone substring",
+    )
+    remover.add_argument("--since", help="only calls on or after YYYY-MM-DD")
+    date_bound = remover.add_mutually_exclusive_group()
+    date_bound.add_argument("--until", help="only calls on or before YYYY-MM-DD")
+    date_bound.add_argument(
+        "--older-than",
+        type=int,
+        metavar="DAYS",
+        help="only calls more than DAYS days old",
+    )
+    remover.add_argument(
+        "--recording-only",
+        action="store_true",
+        help="delete only the audio file, keeping the transcript and sidecar",
     )
     remover.add_argument(
         "--permanent", action="store_true", help="delete outright instead of trashing"
