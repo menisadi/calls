@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -464,6 +465,25 @@ class TestRecordSummary:
         assert data["summary"] == "A short call."
         assert data["stages"]["summarize"]["status"] == "ok"
         assert data["stages"]["summarize"]["model"] == "model-summarize"
+
+
+class TestAllRecordings:
+    def test_orders_chronologically_not_alphabetically(self, config: Config, make_call):
+        # Hebrew names sort after Latin ones by Unicode codepoint, so plain
+        # alphabetical order would put this older call last even though it
+        # happened three weeks earlier - the exact bug this exists to avoid.
+        older = make_call("[דור אקוקה]_[0547602488]_2026-08-19_11-48-33")
+        newer = make_call("[Ariel Hanemann]_[0525252145]_2026-09-08_13-19-54")
+        assert sidecar.all_recordings(config) == [older, newer]
+
+    def test_falls_back_to_mtime_for_an_unparseable_name(
+        self, config: Config, make_call
+    ):
+        older = make_call("some_other_recording")
+        newer = make_call("yet_another_recording")
+        os.utime(older, (1000, 1000))
+        os.utime(newer, (2000, 2000))
+        assert sidecar.all_recordings(config) == [older, newer]
 
 
 class TestResolveInput:
