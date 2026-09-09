@@ -367,6 +367,15 @@ def refresh(
         sidecar["transcript_en"] = None
     stages["translate"] = translate
 
+    # Like topic: the summary lives in the sidecar itself (it's short, same as
+    # a tag, not a full-length artifact), so a refresh only re-derives whether
+    # one is present, preserving record_summary()'s model/at.
+    summarize = dict(stages.get("summarize") or {})
+    summarize["status"] = (
+        "ok" if str(sidecar.get("summary") or "").strip() else "missing"
+    )
+    stages["summarize"] = summarize
+
     sidecar["stages"] = stages
     return sidecar
 
@@ -452,13 +461,71 @@ def record_translation(recording: Path, text: str, model: str) -> dict[str, Any]
     return sidecar
 
 
+def record_summary(recording: Path, summary: str, model: str) -> dict[str, Any]:
+    """Merge a freshly generated summary into the sidecar, and return it.
+
+    Mirrors record_tag: only the fields this step owns are written, and a
+    missing sidecar is created from the filename so summarize can run
+    independently of scribe/topic/translate.
+    """
+    path = sidecar_path_for(recording)
+    sidecar = read(path)
+    sidecar.setdefault("schema", SCHEMA_VERSION)
+    sidecar.setdefault("base", recording.stem)
+
+    parsed = CallName.parse(recording.stem)
+    if parsed is not None:
+        sidecar.setdefault("contact", parsed.contact)
+        sidecar.setdefault("phone_raw", parsed.phone_raw)
+        sidecar.setdefault("date", parsed.date)
+        sidecar.setdefault("time", parsed.time)
+
+    sidecar["summary"] = summary
+
+    stages = dict(sidecar.get("stages") or {})
+    stages["summarize"] = {
+        "status": "ok",
+        "at": now_stamp(),
+        "model": model,
+    }
+    sidecar["stages"] = stages
+
+    write(path, sidecar)
+    return sidecar
+
+
+def _recording_sort_key(recording: Path) -> tuple[str, str, str]:
+    """(date, time, path) for chronological ordering, oldest first.
+
+    Sorting `Path`s directly sorts by filename, which starts with the contact
+    name - not the date - so "the last one" was really "whichever contact
+    name sorts last" (Hebrew names, being higher Unicode codepoints, sort
+    after Latin ones regardless of when the call happened). Falls back to the
+    file's own mtime for a name CallName.parse() can't read, exactly like
+    refresh() does; the path is a tiebreaker so ordering stays deterministic
+    when two recordings share a timestamp.
+    """
+    parsed = CallName.parse(recording.stem)
+    if parsed is not None:
+        date, time = parsed.date, parsed.time
+    else:
+        stamp = datetime.fromtimestamp(recording.stat().st_mtime).astimezone()
+        date = stamp.date().isoformat()
+        time = stamp.time().isoformat(timespec="seconds")
+    return (date, time, str(recording))
+
+
 def all_recordings(config: Config) -> list[Path]:
+    """Every recording in the archive, oldest first."""
     if not config.calls_dir.is_dir():
         raise SidecarError(f"calls directory not found: {config.calls_dir}")
     return sorted(
-        path
-        for path in config.calls_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in config.audio_suffixes
+        (
+            path
+            for path in config.calls_dir.rglob("*")
+            if path.is_file() and path.suffix.lower() in config.audio_suffixes
+        ),
+        key=_recording_sort_key,
     )
 
 

@@ -160,11 +160,27 @@ def _row_from_sidecar(sidecar_path: Path) -> dict[str, Any] | None:
     tag = Tag.from_json(data.get("tag"))
 
     transcript_name = data.get("transcript")
-    body = ""
+    body_parts = []
     if transcript_name:
         transcript_path = sidecar_path.with_name(str(transcript_name))
         if transcript_path.is_file():
-            body = transcript_path.read_text(encoding="utf-8")
+            body_parts.append(transcript_path.read_text(encoding="utf-8"))
+
+    # A search matches whatever text exists for a call - Hebrew transcript,
+    # English translation, English summary - rather than only the Hebrew, so
+    # a call translated or summarized on purpose becomes findable by an
+    # English query too.
+    translation_name = data.get("transcript_en")
+    if translation_name:
+        translation_path = sidecar_path.with_name(str(translation_name))
+        if translation_path.is_file():
+            body_parts.append(translation_path.read_text(encoding="utf-8"))
+
+    summary = data.get("summary")
+    if summary:
+        body_parts.append(str(summary))
+
+    body = "\n".join(body_parts)
 
     return {
         "base": data["base"],

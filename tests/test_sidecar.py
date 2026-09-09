@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -247,6 +248,18 @@ class TestRefresh:
         second = sidecar.refresh(recording, config, existing=first)
         assert second["stages"]["translate"]["status"] == "missing"
 
+    def test_summarize_stage_follows_whether_a_summary_is_present(
+        self, config: Config, make_call
+    ):
+        recording = make_call(HEBREW_BASE, transcript="text")
+        without = sidecar.refresh(recording, config)
+        assert without["stages"]["summarize"]["status"] == "missing"
+
+        with_summary = sidecar.refresh(
+            recording, config, existing={"summary": "A short call about billing."}
+        )
+        assert with_summary["stages"]["summarize"]["status"] == "ok"
+
     def test_preserves_the_tag_and_unknown_keys(self, config: Config, make_call):
         recording = make_call(HEBREW_BASE, transcript="text")
         existing = {
@@ -404,6 +417,73 @@ class TestRecordTranslation:
 
         assert data["stages"]["translate"]["status"] == "ok"
         assert data["stages"]["translate"]["model"] == "model-translate"
+
+
+class TestRecordSummary:
+    def test_writes_the_summary_and_its_provenance(self, config: Config, make_call):
+        recording = make_call(HEBREW_BASE, transcript="שלום")
+        sidecar.write(
+            sidecar.sidecar_path_for(recording), sidecar.refresh(recording, config)
+        )
+
+        data = sidecar.record_summary(recording, "A short call.", "model-summarize")
+
+        assert data["summary"] == "A short call."
+        assert data["stages"]["summarize"]["status"] == "ok"
+        assert data["stages"]["summarize"]["model"] == "model-summarize"
+
+    def test_does_not_clobber_fields_owned_by_refresh(self, config: Config, make_call):
+        recording = make_call(HEBREW_BASE, transcript="one two")
+        refreshed = sidecar.refresh(recording, config, direction="in")
+        sidecar.write(sidecar.sidecar_path_for(recording), refreshed)
+
+        data = sidecar.record_summary(recording, "summary", "model-summarize")
+
+        assert data["direction"] == "in"
+        assert data["phone"] == "+972547602488"
+        assert data["stages"]["scribe"]["words"] == 2
+
+    def test_creates_a_minimal_sidecar_when_none_exists(
+        self, config: Config, make_call
+    ):
+        recording = make_call(HEBREW_BASE, transcript="text")
+        data = sidecar.record_summary(recording, "summary", "model-summarize")
+        assert data["base"] == HEBREW_BASE
+        assert data["contact"] == "דור אקוקה"
+        assert data["date"] == "2026-08-19"
+
+    def test_a_later_refresh_keeps_the_summary_and_provenance(
+        self, config: Config, make_call
+    ):
+        recording = make_call(HEBREW_BASE, transcript="text")
+        sidecar.record_summary(recording, "A short call.", "model-summarize")
+        path = sidecar.sidecar_path_for(recording)
+
+        data = sidecar.refresh(recording, config)
+        sidecar.write(path, data)
+
+        assert data["summary"] == "A short call."
+        assert data["stages"]["summarize"]["status"] == "ok"
+        assert data["stages"]["summarize"]["model"] == "model-summarize"
+
+
+class TestAllRecordings:
+    def test_orders_chronologically_not_alphabetically(self, config: Config, make_call):
+        # Hebrew names sort after Latin ones by Unicode codepoint, so plain
+        # alphabetical order would put this older call last even though it
+        # happened three weeks earlier - the exact bug this exists to avoid.
+        older = make_call("[דור אקוקה]_[0547602488]_2026-08-19_11-48-33")
+        newer = make_call("[Ariel Hanemann]_[0525252145]_2026-09-08_13-19-54")
+        assert sidecar.all_recordings(config) == [older, newer]
+
+    def test_falls_back_to_mtime_for_an_unparseable_name(
+        self, config: Config, make_call
+    ):
+        older = make_call("some_other_recording")
+        newer = make_call("yet_another_recording")
+        os.utime(older, (1000, 1000))
+        os.utime(newer, (2000, 2000))
+        assert sidecar.all_recordings(config) == [older, newer]
 
 
 class TestResolveInput:

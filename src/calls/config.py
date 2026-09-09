@@ -42,9 +42,11 @@ class Config:
     model_he: str
     model_en: str
     model_translate: str
+    model_summarize: str
     lang: str
     max_tokens: int
     translate_max_tokens: int
+    summarize_max_tokens: int
     country_code: str
     audio_suffixes: tuple[str, ...] = field(default=AUDIO_SUFFIXES)
 
@@ -55,6 +57,9 @@ class Config:
         model_he = os.environ.get(
             "CALLS_MODEL_HE",
             str(home / ".local/share/mlx/DictaLM-3.0-1.7B-Instruct-bf16"),
+        )
+        model_en = os.environ.get(
+            "CALLS_MODEL_EN", "mlx-community/Qwen3-4B-4bit-DWQ-053125"
         )
         return cls(
             calls_dir=calls_dir,
@@ -70,14 +75,17 @@ class Config:
             # with no knowledge of this archive.
             scribe_command=os.environ.get("CALLS_SCRIBE", "callscribe"),
             model_he=model_he,
-            model_en=os.environ.get(
-                "CALLS_MODEL_EN", "mlx-community/Qwen3-4B-4bit-DWQ-053125"
-            ),
+            model_en=model_en,
             # Hebrew-to-English translation defaults to the same model as
             # Hebrew tagging: DictaLM's Hebrew tuning produced more faithful
             # translations than Qwen3-4B in testing (e.g. it didn't mistake
             # "brownies" for "bronzes").
             model_translate=os.environ.get("CALLS_MODEL_TRANSLATE", model_he),
+            # Summarizing defaults to the English-tagging model, not DictaLM:
+            # a head-to-head found Qwen3-4B on the English translation was the
+            # only combination of {model, language} that didn't break in some
+            # way - see summarize.py.
+            model_summarize=os.environ.get("CALLS_MODEL_SUMMARIZE", model_en),
             lang=os.environ.get("CALLS_LANG", "he"),
             max_tokens=int(os.environ.get("CALLS_MAX_TOKENS", "300")),
             # A ceiling, not a target: generation stops at the model's own end
@@ -86,6 +94,9 @@ class Config:
             # sized for a short one - see translate.py's per-call scaling.
             translate_max_tokens=int(
                 os.environ.get("CALLS_TRANSLATE_MAX_TOKENS", "8000")
+            ),
+            summarize_max_tokens=int(
+                os.environ.get("CALLS_SUMMARIZE_MAX_TOKENS", "500")
             ),
             country_code=os.environ.get("CALLS_COUNTRY_CODE", DEFAULT_COUNTRY_CODE),
         )

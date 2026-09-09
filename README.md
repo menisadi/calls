@@ -2,7 +2,7 @@
 
 A CLI for a phone call recording archive: import recordings off the phone,
 transcribe them, tag them by topic with a local model, translate them to
-English, and search them.
+English, summarize them, and search them.
 
 ```
 call import                          # copy new recordings, then finish what's outstanding
@@ -10,6 +10,7 @@ call index -s 'תקלה במערכת'           # full-text search the transcrip
 call index -l --contact 0525252145   # list one contact's calls
 call index -l --untagged             # find calls that never got tagged
 call translate --untranslated        # translate every Hebrew call to English
+call summarize --unsummarized        # summarize every translated call
 call rm a1b2c3d                      # remove by the hash id shown in `call index -l`
 ```
 
@@ -120,9 +121,11 @@ Every path and model is an environment variable:
 | `CALLS_MODEL_HE` | `~/.local/share/mlx/DictaLM-3.0-1.7B-Instruct-bf16` |
 | `CALLS_MODEL_EN` | `mlx-community/Qwen3-4B-4bit-DWQ-053125` |
 | `CALLS_MODEL_TRANSLATE` | same as `CALLS_MODEL_HE` |
+| `CALLS_MODEL_SUMMARIZE` | same as `CALLS_MODEL_EN` |
 | `CALLS_LANG` | `he` |
 | `CALLS_MAX_TOKENS` | `300` |
 | `CALLS_TRANSLATE_MAX_TOKENS` | `8000` |
+| `CALLS_SUMMARIZE_MAX_TOKENS` | `500` |
 | `CALLS_COUNTRY_CODE` | `972` |
 
 Use `-l en` for mostly-English transcripts: DictaLM is Hebrew-tuned and gives
@@ -138,6 +141,16 @@ Qwen3-4B, despite being the smaller model.
 translation instead of the Hebrew transcript whenever one exists - `-l he`
 forces the original. This only changes behaviour for calls translated on
 purpose, since nothing is translated automatically.
+
+`call summarize` requires `call translate` to have already run: it summarizes
+the English translation, not the Hebrew transcript, and needs Qwen3-4B rather
+than DictaLM to do it. A head-to-head across all four combinations of
+{Hebrew, English} x {DictaLM, Qwen3-4B} found the other three each broken in
+a different way - Qwen3-4B writing Hebrew directly mixed in stray Chinese
+characters mid-sentence, and DictaLM summarizing its own English translation
+stayed accurate on short calls but hallucinated plausible-sounding fake
+entity names once a call got long and technical. Only Qwen3-4B on the English
+translation held up across a short, a dense, and a long call.
 
 ## Development
 

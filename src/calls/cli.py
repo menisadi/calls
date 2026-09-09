@@ -236,15 +236,90 @@ def cmd_topic(args: argparse.Namespace, config: Config) -> int:
     return 1 if failures else 0
 
 
+def _resolve_hash(raw: str, config: Config) -> list[str]:
+    """Base names matching `raw` as a hash prefix, or [] if the index can't say."""
+    try:
+        return index.resolve_hash(config, raw)
+    except index.ArchiveIndexError:
+        return []
+
+
+def _resolve_recording(raw: str, config: Config) -> Path | None:
+    """A transcript/sidecar/recording path, or a hash prefix from `call index -l`.
+
+    Shared by translate/summarize, and resolves the same way `call rm`/`call
+    show` do: `raw` as a path first, then as a hash prefix. Returns None
+    (having already warned) only when `raw` looks like a hash and matches
+    more than one call; a path that simply doesn't exist yet is still
+    returned as-is, so the caller's own "no transcript for X" error names the
+    right call instead of a resolver-internal one.
+    """
+    resolved = sidecar.resolve_input(raw, config)
+    if resolved.is_file():
+        return resolved
+    matches = _resolve_hash(raw, config)
+    if len(matches) > 1:
+        _warn(f"{PROGRAM_NAME}: '{raw}' matches multiple calls:")
+        for match in matches:
+            _warn(f"  {match}")
+        return None
+    if matches:
+        found = sidecar.find_recording(
+            config.calls_dir / matches[0], config.audio_suffixes
+        )
+        if found is not None:
+            return found
+    return resolved
+
+
+def _contact_recordings(contact: str, config: Config) -> list[Path]:
+    """Every recording matching a --contact filter, resolved to its audio file.
+
+    Shared by translate/summarize (and mirrors `call rm --contact`): relies on
+    the SQLite index for the contact/phone matching, so - like `rm --contact`
+    - it needs a reasonably fresh `call index` to find everything.
+    """
+    filters = Filters(contact=contact, country_code=config.country_code)
+    matches = index.listing(config, filters, limit=sys.maxsize)
+    recordings = []
+    for row in matches:
+        recording = sidecar.find_recording(
+            config.calls_dir / row["base"], config.audio_suffixes
+        )
+        if recording is not None:
+            recordings.append(recording)
+    return recordings
+
+
 def cmd_translate(args: argparse.Namespace, config: Config) -> int:
     from .translate import Translator
 
     notify = _reporter(args.quiet)
 
-    recordings = [sidecar.resolve_input(raw, config) for raw in args.inputs]
+    recordings = []
+    for raw in args.inputs:
+        resolved = _resolve_recording(raw, config)
+        if resolved is None:
+            return 1
+        recordings.append(resolved)
     if args.last:
         recordings.extend(sidecar.all_recordings(config)[-1:])
-    if args.untranslated:
+    if args.contact:
+        matches = _contact_recordings(args.contact, config)
+        if not matches:
+            _warn(f"{PROGRAM_NAME}: no calls match contact '{args.contact}'")
+            return 1
+        if args.untranslated:
+            matches = [
+                recording
+                for recording in matches
+                if sidecar.stage_status(
+                    sidecar.read(sidecar.sidecar_path_for(recording)), "translate"
+                )
+                != "ok"
+            ]
+        recordings.extend(matches)
+    elif args.untranslated:
         recordings.extend(
             recording
             for recording in sidecar.all_recordings(config)
@@ -255,9 +330,17 @@ def cmd_translate(args: argparse.Namespace, config: Config) -> int:
         )
     if not recordings:
         _warn(
-            f"{PROGRAM_NAME} translate: give a transcript, or --last / --untranslated"
+            f"{PROGRAM_NAME} translate: give a transcript, or "
+            "--last / --untranslated / --contact"
         )
         return 1
+    if args.list:
+        for recording in recordings:
+            status = sidecar.stage_status(
+                sidecar.read(sidecar.sidecar_path_for(recording)), "translate"
+            )
+            print(f"{recording.stem}  [translate: {status}]")
+        return 0
 
     notify(f"loading model: {args.model or config.model_translate}")
     translator = Translator.load(config, args.model)
@@ -282,6 +365,84 @@ def cmd_translate(args: argparse.Namespace, config: Config) -> int:
         notify(
             f"{recording.stem}: wrote {sidecar.translation_path_for(recording).name}"
         )
+    return 1 if failures else 0
+
+
+def cmd_summarize(args: argparse.Namespace, config: Config) -> int:
+    from .summarize import Summarizer
+
+    notify = _reporter(args.quiet)
+
+    recordings = []
+    for raw in args.inputs:
+        resolved = _resolve_recording(raw, config)
+        if resolved is None:
+            return 1
+        recordings.append(resolved)
+    if args.last:
+        recordings.extend(sidecar.all_recordings(config)[-1:])
+    if args.contact:
+        matches = _contact_recordings(args.contact, config)
+        if not matches:
+            _warn(f"{PROGRAM_NAME}: no calls match contact '{args.contact}'")
+            return 1
+        if args.unsummarized:
+            matches = [
+                recording
+                for recording in matches
+                if sidecar.stage_status(
+                    sidecar.read(sidecar.sidecar_path_for(recording)), "summarize"
+                )
+                != "ok"
+            ]
+        recordings.extend(matches)
+    elif args.unsummarized:
+        recordings.extend(
+            recording
+            for recording in sidecar.all_recordings(config)
+            if sidecar.stage_status(
+                sidecar.read(sidecar.sidecar_path_for(recording)), "summarize"
+            )
+            != "ok"
+        )
+    if not recordings:
+        _warn(
+            f"{PROGRAM_NAME} summarize: give a transcript, or "
+            "--last / --unsummarized / --contact"
+        )
+        return 1
+    if args.list:
+        for recording in recordings:
+            status = sidecar.stage_status(
+                sidecar.read(sidecar.sidecar_path_for(recording)), "summarize"
+            )
+            print(f"{recording.stem}  [summarize: {status}]")
+        return 0
+
+    notify(f"loading model: {args.model or config.model_summarize}")
+    summarizer = Summarizer.load(config, args.model)
+
+    failures = 0
+    for recording in recordings:
+        translation = sidecar.translation_path_for(recording)
+        if not translation.is_file():
+            _warn(
+                f"{PROGRAM_NAME}: no English translation for {recording.name} "
+                f"(run `{PROGRAM_NAME} translate` first)"
+            )
+            failures += 1
+            continue
+        notify(f"{recording.stem}: summarizing")
+        summary = summarizer.summarize(translation.read_text(encoding="utf-8"))
+        if not summary:
+            _warn(f"{PROGRAM_NAME}: model produced no output for {translation.name}")
+            failures += 1
+            continue
+        if args.dry_run:
+            print(summary)
+            continue
+        sidecar.record_summary(recording, summary, summarizer.model_path)
+        notify(f"{recording.stem}: {summary}")
     return 1 if failures else 0
 
 
@@ -314,14 +475,6 @@ def cmd_index(args: argparse.Namespace, config: Config) -> int:
         return 0
     _rebuild(config, notify)
     return 0
-
-
-def _resolve_hash(raw: str, config: Config) -> list[str]:
-    """Base names matching `raw` as a hash prefix, or [] if the index can't say."""
-    try:
-        return index.resolve_hash(config, raw)
-    except index.ArchiveIndexError:
-        return []
 
 
 def cmd_rm(args: argparse.Namespace, config: Config) -> int:
@@ -452,10 +605,14 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "  CALLS_MODEL_EN       MLX model for --lang en\n"
             "  CALLS_MODEL_TRANSLATE  MLX model for `translate` "
             f"(default: CALLS_MODEL_HE)\n"
+            "  CALLS_MODEL_SUMMARIZE  MLX model for `summarize` "
+            f"(default: CALLS_MODEL_EN)\n"
             f"  CALLS_LANG           Default language (default: {config.lang})\n"
             f"  CALLS_MAX_TOKENS     Generation budget (default: {config.max_tokens})\n"
             "  CALLS_TRANSLATE_MAX_TOKENS  Translation generation ceiling "
             f"(default: {config.translate_max_tokens})\n"
+            "  CALLS_SUMMARIZE_MAX_TOKENS  Summary generation ceiling "
+            f"(default: {config.summarize_max_tokens})\n"
             f"  CALLS_COUNTRY_CODE   Country code for local numbers "
             f"(default: {config.country_code})"
         ),
@@ -558,7 +715,14 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "model, writing it as '<base>.en.txt' next to the transcript."
         ),
     )
-    translator.add_argument("inputs", nargs="*", help="transcript or recording path")
+    translator.add_argument(
+        "inputs",
+        nargs="*",
+        help=(
+            "transcript or recording path, or the hash id shown by "
+            "`call index -l` (a unique prefix of it is enough)"
+        ),
+    )
     translator.add_argument(
         "--last", action="store_true", help="use the newest recording in the archive"
     )
@@ -568,14 +732,89 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         help="translate every call with no English translation yet",
     )
     translator.add_argument(
+        "--contact",
+        help=(
+            "translate every call matching this contact name or phone "
+            "substring, regardless of whether it's already translated "
+            "(combine with --untranslated to only pick up its pending calls)"
+        ),
+    )
+    translator.add_argument(
         "--dry-run",
         action="store_true",
-        help="print the translation without writing it",
+        help=(
+            "generate the translation - same cost as a real run - and print "
+            "it instead of writing it"
+        ),
+    )
+    translator.add_argument(
+        "--list",
+        action="store_true",
+        help=(
+            "print which calls would be translated and their current "
+            "status, without loading the model"
+        ),
     )
     translator.add_argument(
         "-m", "--model", help="MLX model to use (overrides the default)"
     )
     translator.set_defaults(handler=cmd_translate)
+
+    summarizer = subparsers.add_parser(
+        "summarize",
+        parents=[common],
+        help="generate a short English summary of a call",
+        description=(
+            "Generate a short (a few sentences) English summary of a call "
+            "from its translation, and record it in the call's sidecar. "
+            "Requires `call translate` to have already produced an English "
+            "version."
+        ),
+    )
+    summarizer.add_argument(
+        "inputs",
+        nargs="*",
+        help=(
+            "transcript or recording path, or the hash id shown by "
+            "`call index -l` (a unique prefix of it is enough)"
+        ),
+    )
+    summarizer.add_argument(
+        "--last", action="store_true", help="use the newest recording in the archive"
+    )
+    summarizer.add_argument(
+        "--unsummarized",
+        action="store_true",
+        help="summarize every call with no summary yet",
+    )
+    summarizer.add_argument(
+        "--contact",
+        help=(
+            "summarize every call matching this contact name or phone "
+            "substring, regardless of whether it's already summarized "
+            "(combine with --unsummarized to only pick up its pending calls)"
+        ),
+    )
+    summarizer.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "generate the summary - same cost as a real run - and print it "
+            "instead of writing it"
+        ),
+    )
+    summarizer.add_argument(
+        "--list",
+        action="store_true",
+        help=(
+            "print which calls would be summarized and their current "
+            "status, without loading the model"
+        ),
+    )
+    summarizer.add_argument(
+        "-m", "--model", help="MLX model to use (overrides the default)"
+    )
+    summarizer.set_defaults(handler=cmd_summarize)
 
     idx = subparsers.add_parser(
         "index",
