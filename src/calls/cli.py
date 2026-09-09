@@ -236,6 +236,25 @@ def cmd_topic(args: argparse.Namespace, config: Config) -> int:
     return 1 if failures else 0
 
 
+def _contact_recordings(contact: str, config: Config) -> list[Path]:
+    """Every recording matching a --contact filter, resolved to its audio file.
+
+    Shared by translate/summarize (and mirrors `call rm --contact`): relies on
+    the SQLite index for the contact/phone matching, so - like `rm --contact`
+    - it needs a reasonably fresh `call index` to find everything.
+    """
+    filters = Filters(contact=contact, country_code=config.country_code)
+    matches = index.listing(config, filters, limit=sys.maxsize)
+    recordings = []
+    for row in matches:
+        recording = sidecar.find_recording(
+            config.calls_dir / row["base"], config.audio_suffixes
+        )
+        if recording is not None:
+            recordings.append(recording)
+    return recordings
+
+
 def cmd_translate(args: argparse.Namespace, config: Config) -> int:
     from .translate import Translator
 
@@ -253,9 +272,16 @@ def cmd_translate(args: argparse.Namespace, config: Config) -> int:
             )
             != "ok"
         )
+    if args.contact:
+        matches = _contact_recordings(args.contact, config)
+        if not matches:
+            _warn(f"{PROGRAM_NAME}: no calls match contact '{args.contact}'")
+            return 1
+        recordings.extend(matches)
     if not recordings:
         _warn(
-            f"{PROGRAM_NAME} translate: give a transcript, or --last / --untranslated"
+            f"{PROGRAM_NAME} translate: give a transcript, or "
+            "--last / --untranslated / --contact"
         )
         return 1
 
@@ -302,9 +328,16 @@ def cmd_summarize(args: argparse.Namespace, config: Config) -> int:
             )
             != "ok"
         )
+    if args.contact:
+        matches = _contact_recordings(args.contact, config)
+        if not matches:
+            _warn(f"{PROGRAM_NAME}: no calls match contact '{args.contact}'")
+            return 1
+        recordings.extend(matches)
     if not recordings:
         _warn(
-            f"{PROGRAM_NAME} summarize: give a transcript, or --last / --unsummarized"
+            f"{PROGRAM_NAME} summarize: give a transcript, or "
+            "--last / --unsummarized / --contact"
         )
         return 1
 
@@ -622,6 +655,13 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         help="translate every call with no English translation yet",
     )
     translator.add_argument(
+        "--contact",
+        help=(
+            "translate every call matching this contact name or phone "
+            "substring, regardless of whether it's already translated"
+        ),
+    )
+    translator.add_argument(
         "--dry-run",
         action="store_true",
         help="print the translation without writing it",
@@ -650,6 +690,13 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         "--unsummarized",
         action="store_true",
         help="summarize every call with no summary yet",
+    )
+    summarizer.add_argument(
+        "--contact",
+        help=(
+            "summarize every call matching this contact name or phone "
+            "substring, regardless of whether it's already summarized"
+        ),
     )
     summarizer.add_argument(
         "--dry-run", action="store_true", help="print the summary without writing it"
