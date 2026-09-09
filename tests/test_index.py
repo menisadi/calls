@@ -105,6 +105,28 @@ class TestSearch:
         rows = index.search(archive, "CPM", Filters(), limit=10)
         assert rows[0]["base"] == "[Ariel Hanemann]_[0525252145]_2026-08-26_11-07-18"
 
+    def test_matches_an_english_translation_not_just_the_hebrew(self, archive: Config):
+        # A call is findable by its English translation even though the
+        # Hebrew transcript never mentions "electrician".
+        recording = (
+            archive.calls_dir / "[דור אקוקה]_[0547602488]_2026-08-19_11-48-33.opus"
+        )
+        sidecar.record_translation(
+            recording, "Hi Meni, I need an electrician, the oven is broken", "m"
+        )
+        index.build(archive)
+        rows = index.search(archive, "electrician", Filters(), limit=10)
+        assert rows[0]["base"] == "[דור אקוקה]_[0547602488]_2026-08-19_11-48-33"
+
+    def test_matches_a_summary_not_just_the_transcript(self, archive: Config):
+        recording = (
+            archive.calls_dir / "[Ariel Hanemann]_[0525252145]_2026-08-26_11-07-18.opus"
+        )
+        sidecar.record_summary(recording, "A call about a billing discrepancy", "m")
+        index.build(archive)
+        rows = index.search(archive, "billing", Filters(), limit=10)
+        assert rows[0]["base"] == "[Ariel Hanemann]_[0525252145]_2026-08-26_11-07-18"
+
     def test_returns_a_snippet_marking_the_match(self, archive: Config):
         index.build(archive)
         rows = index.search(archive, "תנור", Filters(), limit=10)
