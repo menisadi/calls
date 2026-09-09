@@ -367,6 +367,15 @@ def refresh(
         sidecar["transcript_en"] = None
     stages["translate"] = translate
 
+    # Like topic: the summary lives in the sidecar itself (it's short, same as
+    # a tag, not a full-length artifact), so a refresh only re-derives whether
+    # one is present, preserving record_summary()'s model/at.
+    summarize = dict(stages.get("summarize") or {})
+    summarize["status"] = (
+        "ok" if str(sidecar.get("summary") or "").strip() else "missing"
+    )
+    stages["summarize"] = summarize
+
     sidecar["stages"] = stages
     return sidecar
 
@@ -442,6 +451,39 @@ def record_translation(recording: Path, text: str, model: str) -> dict[str, Any]
 
     stages = dict(sidecar.get("stages") or {})
     stages["translate"] = {
+        "status": "ok",
+        "at": now_stamp(),
+        "model": model,
+    }
+    sidecar["stages"] = stages
+
+    write(path, sidecar)
+    return sidecar
+
+
+def record_summary(recording: Path, summary: str, model: str) -> dict[str, Any]:
+    """Merge a freshly generated summary into the sidecar, and return it.
+
+    Mirrors record_tag: only the fields this step owns are written, and a
+    missing sidecar is created from the filename so summarize can run
+    independently of scribe/topic/translate.
+    """
+    path = sidecar_path_for(recording)
+    sidecar = read(path)
+    sidecar.setdefault("schema", SCHEMA_VERSION)
+    sidecar.setdefault("base", recording.stem)
+
+    parsed = CallName.parse(recording.stem)
+    if parsed is not None:
+        sidecar.setdefault("contact", parsed.contact)
+        sidecar.setdefault("phone_raw", parsed.phone_raw)
+        sidecar.setdefault("date", parsed.date)
+        sidecar.setdefault("time", parsed.time)
+
+    sidecar["summary"] = summary
+
+    stages = dict(sidecar.get("stages") or {})
+    stages["summarize"] = {
         "status": "ok",
         "at": now_stamp(),
         "model": model,

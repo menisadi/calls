@@ -29,9 +29,11 @@ def config(tmp_path: Path) -> Config:
         model_he="model-he",
         model_en="model-en",
         model_translate="model-translate",
+        model_summarize="model-summarize",
         lang="he",
         max_tokens=300,
         translate_max_tokens=8000,
+        summarize_max_tokens=500,
         country_code="972",
         audio_suffixes=AUDIO_SUFFIXES,
     )

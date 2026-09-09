@@ -285,6 +285,56 @@ def cmd_translate(args: argparse.Namespace, config: Config) -> int:
     return 1 if failures else 0
 
 
+def cmd_summarize(args: argparse.Namespace, config: Config) -> int:
+    from .summarize import Summarizer
+
+    notify = _reporter(args.quiet)
+
+    recordings = [sidecar.resolve_input(raw, config) for raw in args.inputs]
+    if args.last:
+        recordings.extend(sidecar.all_recordings(config)[-1:])
+    if args.unsummarized:
+        recordings.extend(
+            recording
+            for recording in sidecar.all_recordings(config)
+            if sidecar.stage_status(
+                sidecar.read(sidecar.sidecar_path_for(recording)), "summarize"
+            )
+            != "ok"
+        )
+    if not recordings:
+        _warn(
+            f"{PROGRAM_NAME} summarize: give a transcript, or --last / --unsummarized"
+        )
+        return 1
+
+    notify(f"loading model: {args.model or config.model_summarize}")
+    summarizer = Summarizer.load(config, args.model)
+
+    failures = 0
+    for recording in recordings:
+        translation = sidecar.translation_path_for(recording)
+        if not translation.is_file():
+            _warn(
+                f"{PROGRAM_NAME}: no English translation for {recording.name} "
+                f"(run `{PROGRAM_NAME} translate` first)"
+            )
+            failures += 1
+            continue
+        notify(f"{recording.stem}: summarizing")
+        summary = summarizer.summarize(translation.read_text(encoding="utf-8"))
+        if not summary:
+            _warn(f"{PROGRAM_NAME}: model produced no output for {translation.name}")
+            failures += 1
+            continue
+        if args.dry_run:
+            print(summary)
+            continue
+        sidecar.record_summary(recording, summary, summarizer.model_path)
+        notify(f"{recording.stem}: {summary}")
+    return 1 if failures else 0
+
+
 def cmd_index(args: argparse.Namespace, config: Config) -> int:
     global _COLOR_MODE
     _COLOR_MODE = args.color
@@ -452,10 +502,14 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "  CALLS_MODEL_EN       MLX model for --lang en\n"
             "  CALLS_MODEL_TRANSLATE  MLX model for `translate` "
             f"(default: CALLS_MODEL_HE)\n"
+            "  CALLS_MODEL_SUMMARIZE  MLX model for `summarize` "
+            f"(default: CALLS_MODEL_EN)\n"
             f"  CALLS_LANG           Default language (default: {config.lang})\n"
             f"  CALLS_MAX_TOKENS     Generation budget (default: {config.max_tokens})\n"
             "  CALLS_TRANSLATE_MAX_TOKENS  Translation generation ceiling "
             f"(default: {config.translate_max_tokens})\n"
+            "  CALLS_SUMMARIZE_MAX_TOKENS  Summary generation ceiling "
+            f"(default: {config.summarize_max_tokens})\n"
             f"  CALLS_COUNTRY_CODE   Country code for local numbers "
             f"(default: {config.country_code})"
         ),
@@ -576,6 +630,34 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         "-m", "--model", help="MLX model to use (overrides the default)"
     )
     translator.set_defaults(handler=cmd_translate)
+
+    summarizer = subparsers.add_parser(
+        "summarize",
+        parents=[common],
+        help="generate a short English summary of a call",
+        description=(
+            "Generate a short (a few sentences) English summary of a call "
+            "from its translation, and record it in the call's sidecar. "
+            "Requires `call translate` to have already produced an English "
+            "version."
+        ),
+    )
+    summarizer.add_argument("inputs", nargs="*", help="transcript or recording path")
+    summarizer.add_argument(
+        "--last", action="store_true", help="use the newest recording in the archive"
+    )
+    summarizer.add_argument(
+        "--unsummarized",
+        action="store_true",
+        help="summarize every call with no summary yet",
+    )
+    summarizer.add_argument(
+        "--dry-run", action="store_true", help="print the summary without writing it"
+    )
+    summarizer.add_argument(
+        "-m", "--model", help="MLX model to use (overrides the default)"
+    )
+    summarizer.set_defaults(handler=cmd_summarize)
 
     idx = subparsers.add_parser(
         "index",
