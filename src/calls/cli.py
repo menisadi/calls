@@ -28,8 +28,8 @@ _BOLD = "\033[1m"
 _DIM = "\033[2m"
 _CYAN = "\033[36m"
 _YELLOW = "\033[33m"
-_GREEN = "\033[32m"
-_MAGENTA = "\033[35m"
+_BLUE = "\033[34m"
+_RED = "\033[31m"
 
 # The snippet() call in index.search() marks matches with these control
 # characters rather than literal brackets, so they can't collide with
@@ -75,7 +75,7 @@ def _reporter(quiet: bool):
     return notify
 
 
-_ARROW_STYLE = {"in": (_GREEN, _BOLD), "out": (_MAGENTA, _BOLD)}
+_ARROW_STYLE = {"in": (_BLUE, _BOLD), "out": (_RED, _BOLD)}
 
 
 def _print_rows(
