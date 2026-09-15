@@ -12,6 +12,7 @@ call index -l --untagged             # find calls that never got tagged
 call translate --untranslated        # translate every Hebrew call to English
 call summarize --unsummarized        # summarize every translated call
 call rm a1b2c3d                      # remove by the hash id shown in `call index -l`
+call rm --older-than 90 --recording-only   # reclaim space, keep transcripts forever
 ```
 
 ## How the archive is laid out

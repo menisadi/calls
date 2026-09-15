@@ -494,6 +494,25 @@ def record_summary(recording: Path, summary: str, model: str) -> dict[str, Any]:
     return sidecar
 
 
+def record_recording_removed(recording: Path) -> dict[str, Any]:
+    """Clear the recording field after its audio file is deleted.
+
+    Everything else - transcript, translation, summary, tag - is left alone.
+    ``refresh()`` can't run afterward (it stats the audio file), so this is the
+    one place that marks the recording gone without touching what survives it.
+    """
+    path = sidecar_path_for(recording)
+    sidecar = read(path)
+    sidecar["recording"] = None
+
+    stages = dict(sidecar.get("stages") or {})
+    stages["recording"] = {"status": "removed", "at": now_stamp()}
+    sidecar["stages"] = stages
+
+    write(path, sidecar)
+    return sidecar
+
+
 def _recording_sort_key(recording: Path) -> tuple[str, str, str]:
     """(date, time, path) for chronological ordering, oldest first.
 
