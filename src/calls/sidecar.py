@@ -494,6 +494,25 @@ def record_summary(recording: Path, summary: str, model: str) -> dict[str, Any]:
     return sidecar
 
 
+def clear_for_retranscribe(recording: Path) -> None:
+    """Drop everything derived from the old transcript, ready for a new one.
+
+    The English translation, tag and summary describe text that is about to be
+    replaced, so they go too, along with their stage provenance. A following
+    refresh() re-derives every stage's status from what is left on disk.
+    """
+    translation_path_for(recording).unlink(missing_ok=True)
+    path = sidecar_path_for(recording)
+    sidecar = read(path)
+    for key in ("tag", "summary", "transcript_en"):
+        sidecar.pop(key, None)
+    stages = dict(sidecar.get("stages") or {})
+    for stage in ("scribe", "topic", "translate", "summarize"):
+        stages.pop(stage, None)
+    sidecar["stages"] = stages
+    write(path, sidecar)
+
+
 def record_recording_removed(recording: Path) -> dict[str, Any]:
     """Clear the recording field after its audio file is deleted.
 

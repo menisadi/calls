@@ -1,9 +1,9 @@
 """The `call` command: subcommands over one call archive.
 
-Transcription is deliberately not a subcommand here. It stays an external shell
-tool (`callscribe`): it is an ffmpeg/whisper-cli/awk pipeline with real
-portability workarounds, and it is useful on arbitrary audio with no knowledge
-of this archive. `call import` invokes it.
+Transcription itself stays an external shell tool (`callscribe`): it is an
+ffmpeg/whisper-cli/awk pipeline with real portability workarounds, and it is
+useful on arbitrary audio with no knowledge of this archive. `call import`
+invokes it for new calls, and `call transcribe` re-runs it on existing ones.
 """
 
 from __future__ import annotations
@@ -616,6 +616,50 @@ def cmd_show(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def cmd_transcribe(args: argparse.Namespace, config: Config) -> int:
+    notify = _reporter(args.quiet)
+
+    recordings = []
+    for raw in args.inputs:
+        resolved = _resolve_recording(raw, config)
+        if resolved is None:
+            return 1
+        if resolved.suffix.lower() not in config.audio_suffixes:
+            _warn(f"{PROGRAM_NAME}: no recording found for '{raw}'")
+            return 1
+        recordings.append(resolved)
+
+    done = 0
+    for recording in recordings:
+        if not args.force and recording.with_suffix(".txt").is_file():
+            reply = (
+                input(
+                    f"Retranscribe {recording.stem}? Its tag, translation and "
+                    "summary will be cleared. [y/N] "
+                )
+                .strip()
+                .lower()
+            )
+            if reply != "y":
+                notify(f"skipped {recording.stem}")
+                continue
+        notify(f"transcribing ({args.lang}): {recording.stem}")
+        # Transcribe first: a failure must not clear a good transcript's
+        # derived data.
+        pipeline.transcribe(recording, config, args.quiet, args.lang, args.model)
+        sidecar.clear_for_retranscribe(recording)
+        refreshed = sidecar.refresh(recording, config)
+        sidecar.write(sidecar.sidecar_path_for(recording), refreshed)
+        if sidecar.stage_status(refreshed, "scribe") != "ok":
+            _warn(f"{PROGRAM_NAME}: no usable transcript for {recording.stem}")
+            return 1
+        done += 1
+
+    if done and not args.no_index:
+        _rebuild(config, notify)
+    return 0
+
+
 def _add_lang_options(parser: argparse.ArgumentParser, config: Config) -> None:
     parser.add_argument(
         "-l",
@@ -744,6 +788,44 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
     )
     _add_lang_options(topic, config)
     topic.set_defaults(handler=cmd_topic)
+
+    transcriber = subparsers.add_parser(
+        "transcribe",
+        parents=[common],
+        help="(re)transcribe calls, e.g. in a different language",
+        description=(
+            "Run the transcription tool on existing calls, replacing their "
+            "transcript. The tag, English translation and summary describe the "
+            "old transcript, so they are cleared; run `call import` to tag "
+            "again (pass -l to match the new language, since tagging otherwise "
+            "uses CALLS_LANG)."
+        ),
+    )
+    transcriber.add_argument(
+        "inputs",
+        nargs="+",
+        help=(
+            "recording, transcript or sidecar path, or the hash id shown by "
+            "`call index -l` (a unique prefix of it is enough)"
+        ),
+    )
+    transcriber.add_argument(
+        "-l",
+        "--lang",
+        choices=["he", "en", "auto"],
+        default=config.lang,
+        help="spoken language (default: %(default)s)",
+    )
+    transcriber.add_argument(
+        "-m", "--model", help="whisper ggml model path (overrides the tool's default)"
+    )
+    transcriber.add_argument(
+        "-f", "--force", action="store_true", help="do not ask for confirmation"
+    )
+    transcriber.add_argument(
+        "--no-index", action="store_true", help="skip the index rebuild"
+    )
+    transcriber.set_defaults(handler=cmd_transcribe)
 
     translator = subparsers.add_parser(
         "translate",

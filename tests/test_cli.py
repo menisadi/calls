@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from datetime import date, timedelta
 
 import pytest
@@ -179,3 +180,69 @@ class TestBatchConfirmation:
         assert result == 0
         assert not first.is_file()
         assert second.is_file()
+
+
+class TestTranscribe:
+    def _run(self, config: Config, argv: list[str]):
+        parser = cli.build_parser(config)
+        args = parser.parse_args(["transcribe", *argv])
+        return args.handler(args, config)
+
+    def test_passes_language_and_model_through(
+        self, config: Config, indexed_call, monkeypatch
+    ):
+        recording = indexed_call("[A]_[0501111111]_2026-08-30_20-22-21")
+        seen: list[list[str]] = []
+
+        real_run = subprocess.run
+
+        def fake_run(command, **kwargs):
+            if command[0] != config.scribe_command:
+                return real_run(command, **kwargs)
+            seen.append(command)
+            recording.with_suffix(".txt").write_text("new text", encoding="utf-8")
+
+        monkeypatch.setattr("calls.pipeline.subprocess.run", fake_run)
+        result = self._run(
+            config, [str(recording), "-l", "en", "-m", "m.bin", "-f", "--no-index"]
+        )
+
+        assert result == 0
+        assert seen[0][-1] == str(recording)
+        assert seen[0][1:5] == ["-l", "en", "-m", "m.bin"]
+
+    def test_clears_what_was_derived_from_the_old_transcript(
+        self, config: Config, indexed_call, monkeypatch
+    ):
+        recording = indexed_call("[A]_[0501111111]_2026-08-30_20-22-21")
+        sidecar.record_tag(recording, sidecar.Tag(general="x"), "m", "he")
+        sidecar.record_translation(recording, "old english", "m")
+        sidecar.record_summary(recording, "old summary", "m")
+
+        real_run = subprocess.run
+
+        def fake_run(command, **kwargs):
+            if command[0] != config.scribe_command:
+                return real_run(command, **kwargs)
+            recording.with_suffix(".txt").write_text("new text", encoding="utf-8")
+
+        monkeypatch.setattr("calls.pipeline.subprocess.run", fake_run)
+        assert self._run(config, [str(recording), "-f", "--no-index"]) == 0
+
+        data = sidecar.read(sidecar.sidecar_path_for(recording))
+        assert not sidecar.translation_path_for(recording).exists()
+        assert "tag" not in data
+        assert "summary" not in data
+        for stage in ("topic", "translate", "summarize"):
+            assert sidecar.stage_status(data, stage) == "missing"
+        assert sidecar.stage_status(data, "scribe") == "ok"
+
+    def test_a_failed_run_keeps_the_old_data(
+        self, config: Config, indexed_call, monkeypatch
+    ):
+        recording = indexed_call("[A]_[0501111111]_2026-08-30_20-22-21")
+        sidecar.record_translation(recording, "old english", "m")
+        # The fixture's scribe command is not installed, so this fails.
+        with pytest.raises(cli.pipeline.PipelineError):
+            self._run(config, [str(recording), "-f", "--no-index"])
+        assert sidecar.translation_path_for(recording).is_file()

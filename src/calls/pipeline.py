@@ -119,11 +119,25 @@ def plan_for(recording: Path, config: Config, refresh: bool = True) -> Plan:
     )
 
 
-def transcribe(recording: Path, config: Config, quiet: bool) -> None:
-    """Run the external transcription tool on one recording."""
+def transcribe(
+    recording: Path,
+    config: Config,
+    quiet: bool,
+    lang: str | None = None,
+    model: str | None = None,
+) -> None:
+    """Run the external transcription tool on one recording.
+
+    `lang` and `model` are passed through only when given, so the tool's own
+    defaults (and CALLSCRIBE_* environment) still apply to `call import`.
+    """
     command = [config.scribe_command]
     if quiet:
         command.append("-q")
+    if lang:
+        command += ["-l", lang]
+    if model:
+        command += ["-m", model]
     command.append(str(recording))
     try:
         subprocess.run(command, check=True)
