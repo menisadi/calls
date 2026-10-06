@@ -90,7 +90,7 @@ found nothing at all. Basenames are compared as strings.
 
 ## Transcription stays a shell script
 
-`callscribe` (in `~/bin`) is not a subcommand here, on purpose. It is an
+`callscribe` (`scripts/callscribe`) is not a subcommand here, on purpose. It is an
 ffmpeg/whisper-cli/awk pipeline: it detects whether a recording's two channels
 carry genuinely different audio, transcribes each channel separately and merges
 them on a shared clock for real speaker attribution, and carries portability
@@ -112,6 +112,7 @@ needs `-l en` too, since tagging otherwise uses `CALLS_LANG`.
 ```sh
 uv tool install ~/Code/personal/calls     # puts `call` on PATH
 uv tool install --force --reinstall .     # after making changes
+ln -s ~/Code/personal/calls/scripts/callscribe ~/bin/callscribe  # any dir on PATH
 ```
 
 Requires `ffprobe` (duration/channels), `callscribe` (transcription) and

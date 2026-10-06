@@ -1,6 +1,6 @@
 """The `call` command: subcommands over one call archive.
 
-Transcription itself stays an external shell tool (`callscribe`): it is an
+Transcription itself stays a shell script (`scripts/callscribe`): it is an
 ffmpeg/whisper-cli/awk pipeline with real portability workarounds, and it is
 useful on arbitrary audio with no knowledge of this archive. `call import`
 invokes it for new calls, and `call transcribe` re-runs it on existing ones.

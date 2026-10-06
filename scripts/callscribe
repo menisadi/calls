@@ -1,0 +1,456 @@
+#!/usr/bin/env bash
+#
+# callscribe - transcribe phone call recordings (Hebrew by default) with
+#              speaker labels when the audio has genuinely separated channels.
+#
+set -euo pipefail
+IFS=$'\n\t'
+
+readonly PROGRAM_NAME="${0##*/}"
+
+# Defaults, all overridable by environment or flags.
+# An explicit --model or CALLSCRIBE_MODEL wins; otherwise the model follows the
+# language (see the end of option parsing): Hebrew uses the Hebrew-tuned
+# model, anything else the multilingual one.
+model_path="${CALLSCRIBE_MODEL:-}"
+model_path_he="${CALLSCRIBE_MODEL_HE:-${HOME}/.local/share/whisper/ivrit-turbo/ggml-model.bin}"
+model_path_en="${CALLSCRIBE_MODEL_EN:-${HOME}/.local/share/whisper/large-v3-turbo/ggml-model.bin}"
+vad_model_path="${CALLSCRIBE_VAD_MODEL:-${HOME}/.local/share/whisper/vad/ggml-silero-v6.2.0.bin}"
+calls_dir="${CALLSCRIBE_CALLS_DIR:-${HOME}/Recordings/calls}"
+language="${CALLSCRIBE_LANG:-he}"
+thread_count="${CALLSCRIBE_THREADS:-8}"
+
+# A recording is treated as truly two-channel only when the L-R difference
+# signal peaks above this level. Duplicated "fake stereo" sits at the
+# quantisation floor around -90 dB, so anything above -60 dB is real content.
+readonly SEPARATION_THRESHOLD_DB="-60"
+
+# In unlabelled output, a silence longer than this starts a new paragraph.
+# Fast talkers rarely pause this long, so lower it if transcripts come out as
+# one solid block.
+paragraph_gap_ms="${CALLSCRIBE_GAP_MS:-2000}"
+
+speaker_names="Me,Them"
+swap_speakers="false"
+output_dir=""
+write_srt="false"
+show_timestamps="false"
+force_mono="false"
+use_latest="false"
+probe_only="false"
+quiet="false"
+
+_warn() { printf '%s\n' "$*" >&2; }
+_die() { _warn "${PROGRAM_NAME}: $*"; exit 1; }
+_info() { [[ "${quiet}" == "true" ]] || _warn "$*"; }
+
+usage() {
+  cat <<EOF
+Usage: ${PROGRAM_NAME} [options] <recording> [recording...]
+       ${PROGRAM_NAME} [options] --last
+
+Transcribe call recordings with whisper.cpp. Writes "<name>.txt" (and
+optionally "<name>.srt") next to each input file.
+
+Speaker labels depend on the recording itself. If the two audio channels hold
+genuinely different signals - your microphone on one, the far end on the other
+- each channel is transcribed separately and the results are merged on a shared
+clock, giving exact speaker attribution. If the channels are identical
+("fake stereo", which is what most call recorders produce by default) or the
+file is mono, output is unlabelled and a note explains why.
+
+Options:
+  -l, --lang LANG        Spoken language (default: ${language}; "auto" to detect)
+  -m, --model PATH       Whisper ggml model (default: chosen by language)
+      --vad-model PATH   Silero VAD ggml model
+  -s, --speakers "A,B"   Names for the two channels (default: ${speaker_names})
+      --swap             Swap the two speaker names
+  -o, --outdir DIR       Write output here instead of beside the input
+  -t, --threads N        Threads for whisper.cpp (default: ${thread_count})
+      --srt              Also write a .srt subtitle file
+      --timestamps       Prefix each paragraph with [mm:ss] in the .txt
+      --gap MS           Silence that starts a new paragraph in unlabelled
+                         output (default: ${paragraph_gap_ms}ms; lower it if a
+                         transcript comes out as one solid block)
+      --force-mono       Skip channel detection; downmix and transcribe once
+      --probe            Report whether speaker labels are possible, then exit
+                         without transcribing
+      --last             Transcribe the newest recording in the calls directory
+  -q, --quiet            Suppress progress messages
+  -h, --help             Show this help
+
+Environment:
+  CALLSCRIBE_MODEL       Whisper model path for every language (overrides the two below)
+  CALLSCRIBE_MODEL_HE    Model for --lang he (default: ${model_path_he})
+  CALLSCRIBE_MODEL_EN    Model for any other language (default: ${model_path_en})
+  CALLSCRIBE_VAD_MODEL   Default VAD model path
+  CALLSCRIBE_CALLS_DIR   Directory searched by --last (default: ${calls_dir})
+  CALLSCRIBE_LANG        Default language
+  CALLSCRIBE_THREADS     Default thread count
+  CALLSCRIBE_GAP_MS      Default paragraph gap in milliseconds
+
+Notes:
+  Speaker names are assigned left channel first. There is no reliable way to
+  tell which channel holds your own voice, so if the names come out reversed,
+  re-run with --swap.
+
+  Labels are applied per transcription segment. A segment that straddles a
+  speaker change is attributed to whoever dominates it; with normal
+  conversational turns this is rarely visible.
+
+  Hebrew output is right-to-left. Latin speaker names and [mm:ss] prefixes sit
+  awkwardly next to it in a terminal, so the .txt is written without
+  timestamps unless you ask for them.
+EOF
+}
+
+_require() {
+  local tool
+  for tool in "$@"; do
+    command -v "${tool}" >/dev/null 2>&1 || _die "required tool not found: ${tool}"
+  done
+}
+
+# Peak level of the (L-R) difference signal, in dB. Empty if undeterminable.
+_difference_peak_db() {
+  local input_file="$1"
+  ffmpeg -hide_banner -nostdin -i "${input_file}" \
+    -af 'pan=mono|c0=0.5*c0-0.5*c1,volumedetect' -f null - 2>&1 \
+    | sed -n 's/.*max_volume: \(-*[0-9.]*\) dB.*/\1/p' \
+    | tail -n 1
+}
+
+_channel_count() {
+  local input_file="$1"
+  ffprobe -v error -select_streams a:0 \
+    -show_entries stream=channels -of default=nw=1:nk=1 "${input_file}"
+}
+
+# True when the file has two channels carrying different audio.
+_has_separated_channels() {
+  local input_file="$1"
+  local channels peak
+
+  channels="$(_channel_count "${input_file}" || true)"
+  [[ "${channels}" == "2" ]] || return 1
+
+  peak="$(_difference_peak_db "${input_file}" || true)"
+  [[ -n "${peak}" ]] || return 1
+
+  awk -v peak="${peak}" -v threshold="${SEPARATION_THRESHOLD_DB}" \
+    'BEGIN { exit !(peak > threshold) }'
+}
+
+_decode_mono() {
+  local input_file="$1" output_wav="$2"
+  ffmpeg -hide_banner -nostdin -v error -y \
+    -i "${input_file}" -ac 1 -ar 16000 -c:a pcm_s16le "${output_wav}"
+}
+
+# Split a stereo file into two full-length mono WAVs. Length is preserved on
+# both sides on purpose: the silences are what keep the two transcripts on a
+# single shared clock, which is what makes the merge correct.
+_decode_channels() {
+  local input_file="$1" left_wav="$2" right_wav="$3"
+  ffmpeg -hide_banner -nostdin -v error -y -i "${input_file}" \
+    -filter_complex 'channelsplit=channel_layout=stereo[left][right]' \
+    -map '[left]' -ar 16000 -c:a pcm_s16le "${left_wav}" \
+    -map '[right]' -ar 16000 -c:a pcm_s16le "${right_wav}"
+}
+
+_transcribe() {
+  local input_wav="$1" output_prefix="$2"
+  whisper-cli \
+    -m "${model_path}" \
+    --vad -vm "${vad_model_path}" \
+    -l "${language}" \
+    -t "${thread_count}" \
+    -np -oj -of "${output_prefix}" \
+    "${input_wav}" >/dev/null 2>&1 \
+    || _die "whisper-cli failed on ${input_wav}"
+}
+
+# Flatten whisper JSON to "from_ms<TAB>to_ms<TAB>speaker<TAB>text".
+#
+# whisper-cli occasionally writes a raw, unescaped newline inside a "text"
+# value (observed wrapping long segments), which makes the JSON invalid and
+# jq refuses to parse it. \t, \n, and \r are otherwise only ever used as
+# insignificant formatting whitespace between tokens in this output, so
+# stripping them is safe and neutralizes the stray in-string newline too.
+#
+# LC_ALL=C: under a UTF-8 locale, macOS's tr validates the whole input as
+# UTF-8 and aborts with "Illegal byte sequence" on the odd malformed byte
+# from whisper-cli, truncating the stream. The C locale makes tr treat input
+# as raw bytes, which is fine here since -d only ever matches single-byte
+# ASCII controls and passes multi-byte UTF-8 text through untouched.
+_segments_to_tsv() {
+  local json_file="$1" speaker="$2"
+  LC_ALL=C tr -d '\t\r\n' <"${json_file}" | jq -r --arg speaker "${speaker}" '
+    .transcription[]
+    | select((.text | gsub("\\s"; "")) != "")
+    | [ (.offsets.from | tostring),
+        (.offsets.to | tostring),
+        $speaker,
+        (.text | gsub("^\\s+|\\s+$"; "")) ]
+    | @tsv
+  '
+}
+
+# Group segments into readable paragraphs: on speaker change when labelled,
+# on a long silence otherwise.
+_format_transcript() {
+  local labelled="$1"
+  awk -F'\t' \
+    -v labelled="${labelled}" \
+    -v with_timestamps="${show_timestamps}" \
+    -v gap_ms="${paragraph_gap_ms}" '
+    function clock(ms,    total, minutes, seconds) {
+      total = int(ms / 1000)
+      minutes = int(total / 60)
+      seconds = total % 60
+      return sprintf("[%02d:%02d] ", minutes, seconds)
+    }
+    function flush() {
+      if (buffer == "") return
+      prefix = (with_timestamps == "true") ? clock(buffer_start) : ""
+      if (labelled == "true") {
+        printf "%s%s: %s\n\n", prefix, buffer_speaker, buffer
+      } else {
+        printf "%s%s\n\n", prefix, buffer
+      }
+      buffer = ""
+    }
+    {
+      from = $1 + 0; to = $2 + 0; speaker = $3; text = $4
+      start_new = (buffer == "")
+      if (!start_new) {
+        if (labelled == "true") {
+          if (speaker != buffer_speaker) start_new = 1
+        } else if (from - previous_end > gap_ms) {
+          start_new = 1
+        }
+      }
+      if (start_new) {
+        flush()
+        buffer_start = from
+        buffer_speaker = speaker
+        buffer = text
+      } else {
+        buffer = buffer " " text
+      }
+      previous_end = to
+    }
+    END { flush() }
+  '
+}
+
+_format_srt() {
+  local labelled="$1"
+  awk -F'\t' -v labelled="${labelled}" '
+    function stamp(ms,    hours, minutes, seconds, millis, total) {
+      total = int(ms / 1000); millis = ms % 1000
+      hours = int(total / 3600)
+      minutes = int((total % 3600) / 60)
+      seconds = total % 60
+      return sprintf("%02d:%02d:%02d,%03d", hours, minutes, seconds, millis)
+    }
+    {
+      printf "%d\n%s --> %s\n", NR, stamp($1 + 0), stamp($2 + 0)
+      if (labelled == "true") printf "%s: ", $3
+      printf "%s\n\n", $4
+    }
+  '
+}
+
+_newest_recording() {
+  local directory="$1"
+  [[ -d "${directory}" ]] || _die "calls directory not found: ${directory}"
+
+  # BSD stat (macOS) and GNU stat (Linux, Termux) disagree on both the flag and
+  # the format specifiers, so choose once and pass it to xargs as a real
+  # command - xargs cannot call a shell function.
+  local -a stat_command
+  if stat -f '%m %N' . >/dev/null 2>&1; then
+    stat_command=(stat -f '%m %N')
+  else
+    stat_command=(stat -c '%Y %n')
+  fi
+
+  # -print0 with -0 keeps names containing spaces and brackets intact.
+  find "${directory}" -type f \
+    \( -iname '*.opus' -o -iname '*.m4a' -o -iname '*.mp3' \
+       -o -iname '*.wav' -o -iname '*.ogg' -o -iname '*.flac' \
+       -o -iname '*.aac' -o -iname '*.amr' \) -print0 2>/dev/null \
+    | xargs -0 "${stat_command[@]}" 2>/dev/null \
+    | sort -rn \
+    | head -n 1 \
+    | cut -d' ' -f2-
+}
+
+# Report whether a recording can carry speaker labels, without transcribing.
+# Useful after changing a call recorder's stereo setting: record a short test
+# call, probe it, and see whether the channels actually came out separated.
+probe_recording() {
+  local input_file="$1"
+  local channels peak
+
+  [[ -f "${input_file}" ]] || _die "no such file: ${input_file}"
+
+  channels="$(_channel_count "${input_file}" || true)"
+  printf '%s\n' "${input_file##*/}"
+  printf '  channels:    %s\n' "${channels:-unknown}"
+
+  if [[ "${channels}" != "2" ]]; then
+    printf '  verdict:     mono - no speaker labels possible\n'
+    return 0
+  fi
+
+  peak="$(_difference_peak_db "${input_file}" || true)"
+  printf '  L-R peak:    %s dB (separated above %s dB)\n' \
+    "${peak:-unknown}" "${SEPARATION_THRESHOLD_DB}"
+
+  if [[ -n "${peak}" ]] && awk -v peak="${peak}" \
+      -v threshold="${SEPARATION_THRESHOLD_DB}" \
+      'BEGIN { exit !(peak > threshold) }'; then
+    printf '  verdict:     separated - speaker labels available\n'
+  else
+    printf '  verdict:     duplicated mono ("fake stereo") - no speaker labels\n'
+  fi
+}
+
+process_recording() {
+  local input_file="$1"
+  local base_name target_dir output_base work_dir
+  local left_name right_name labelled tsv_file
+
+  [[ -f "${input_file}" ]] || _die "no such file: ${input_file}"
+
+  base_name="${input_file##*/}"
+  base_name="${base_name%.*}"
+  target_dir="${output_dir:-$(dirname "${input_file}")}"
+  mkdir -p "${target_dir}"
+  output_base="${target_dir}/${base_name}"
+
+  work_dir="$(mktemp -d)"
+  # shellcheck disable=SC2064  # expand work_dir now, not at trap time
+  trap "rm -rf '${work_dir}'" RETURN
+
+  tsv_file="${work_dir}/segments.tsv"
+
+  if [[ "${force_mono}" == "false" ]] && _has_separated_channels "${input_file}"; then
+    labelled="true"
+    left_name="${speaker_names%%,*}"
+    right_name="${speaker_names##*,}"
+    if [[ "${swap_speakers}" == "true" ]]; then
+      local temp_name="${left_name}"
+      left_name="${right_name}"
+      right_name="${temp_name}"
+    fi
+
+    _info "${base_name}: separated channels detected - labelling ${left_name} / ${right_name}"
+    _decode_channels "${input_file}" "${work_dir}/left.wav" "${work_dir}/right.wav"
+    _transcribe "${work_dir}/left.wav" "${work_dir}/left"
+    _transcribe "${work_dir}/right.wav" "${work_dir}/right"
+
+    {
+      _segments_to_tsv "${work_dir}/left.json" "${left_name}"
+      _segments_to_tsv "${work_dir}/right.json" "${right_name}"
+    } | sort -n -k1,1 -k2,2 >"${tsv_file}"
+  else
+    labelled="false"
+    if [[ "${force_mono}" == "true" ]]; then
+      _info "${base_name}: --force-mono, transcribing without speaker labels"
+    else
+      _info "${base_name}: channels are identical or mono - no speaker labels"
+    fi
+
+    _decode_mono "${input_file}" "${work_dir}/mono.wav"
+    _transcribe "${work_dir}/mono.wav" "${work_dir}/mono"
+    _segments_to_tsv "${work_dir}/mono.json" "" >"${tsv_file}"
+  fi
+
+  [[ -s "${tsv_file}" ]] || _die "no speech transcribed from ${input_file}"
+
+  _format_transcript "${labelled}" <"${tsv_file}" >"${output_base}.txt"
+  _info "wrote ${output_base}.txt"
+
+  if [[ "${write_srt}" == "true" ]]; then
+    _format_srt "${labelled}" <"${tsv_file}" >"${output_base}.srt"
+    _info "wrote ${output_base}.srt"
+  fi
+}
+
+main() {
+  local -a recordings=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      -l|--lang) language="${2:?--lang needs a value}"; shift 2 ;;
+      -m|--model) model_path="${2:?--model needs a path}"; shift 2 ;;
+      --vad-model) vad_model_path="${2:?--vad-model needs a path}"; shift 2 ;;
+      -s|--speakers) speaker_names="${2:?--speakers needs \"A,B\"}"; shift 2 ;;
+      -o|--outdir) output_dir="${2:?--outdir needs a path}"; shift 2 ;;
+      -t|--threads) thread_count="${2:?--threads needs a number}"; shift 2 ;;
+      --swap) swap_speakers="true"; shift ;;
+      --srt) write_srt="true"; shift ;;
+      --timestamps) show_timestamps="true"; shift ;;
+      --gap) paragraph_gap_ms="${2:?--gap needs milliseconds}"; shift 2 ;;
+      --force-mono) force_mono="true"; shift ;;
+      --probe) probe_only="true"; shift ;;
+      --last) use_latest="true"; shift ;;
+      -q|--quiet) quiet="true"; shift ;;
+      --) shift; break ;;
+      -*) _die "unknown option: $1 (try --help)" ;;
+      *) recordings+=("$1"); shift ;;
+    esac
+  done
+  # Anything after "--" is a filename.
+  while [[ $# -gt 0 ]]; do
+    recordings+=("$1")
+    shift
+  done
+
+  if [[ -z "${model_path}" ]]; then
+    if [[ "${language}" == "he" ]]; then
+      model_path="${model_path_he}"
+    else
+      model_path="${model_path_en}"
+    fi
+  fi
+
+  if [[ "${probe_only}" == "true" ]]; then
+    _require ffmpeg ffprobe awk
+  else
+    _require ffmpeg ffprobe jq awk whisper-cli
+  fi
+
+  if [[ "${use_latest}" == "true" ]]; then
+    local latest
+    latest="$(_newest_recording "${calls_dir}")"
+    [[ -n "${latest}" ]] || _die "no recordings found in ${calls_dir}"
+    recordings+=("${latest}")
+  fi
+
+  if [[ "${#recordings[@]}" -eq 0 ]]; then
+    usage
+    exit 1
+  fi
+
+  if [[ "${probe_only}" == "false" ]]; then
+    [[ -f "${model_path}" ]] || _die "model not found: ${model_path}"
+    [[ -f "${vad_model_path}" ]] || _die "VAD model not found: ${vad_model_path}"
+  fi
+
+  local recording
+  for recording in "${recordings[@]}"; do
+    if [[ "${probe_only}" == "true" ]]; then
+      probe_recording "${recording}"
+    else
+      process_recording "${recording}"
+    fi
+  done
+}
+
+main "$@"
+# vim: ft=sh
