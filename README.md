@@ -9,7 +9,7 @@ call import                          # copy new recordings, then finish what's o
 call index -s 'תקלה במערכת'           # full-text search the transcripts
 call index -l --contact 0525252145   # list one contact's calls
 call index -l --untagged             # find calls that never got tagged
-call transcribe a1b2c3d -l en -m MODEL.bin   # retranscribe in another language
+call transcribe a1b2c3d -l en        # retranscribe in another language
 call translate --untranslated        # translate every Hebrew call to English
 call summarize --unsummarized        # summarize every translated call
 call rm a1b2c3d                      # remove by the hash id shown in `call index -l`
@@ -102,8 +102,9 @@ somewhere else if needed.
 
 `call transcribe` re-runs it on existing calls, e.g. one that was transcribed
 in the default Hebrew but is spoken in English. `-l` is the spoken language and
-`-m` the whisper model path (the default `ivrit-turbo` model is Hebrew-tuned, so
-pass an English or multilingual model for `-l en`). The tag, translation and
+`-m` the whisper model path, which by default follows the language (the
+Hebrew-tuned `ivrit-turbo` for `he`, the multilingual `large-v3-turbo`
+otherwise). The tag, translation and
 summary of the old transcript are cleared; `call import` then tags again, and
 needs `-l en` too, since tagging otherwise uses `CALLS_LANG`.
 
