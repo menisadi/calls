@@ -130,9 +130,23 @@ def cmd_import(args: argparse.Namespace, config: Config) -> int:
     notify = _reporter(args.quiet)
     report = ImportReport()
 
-    pipeline.copy_new(config, report, args.dry_run, notify)
-
-    recordings = sidecar.all_recordings(config)
+    if args.inputs:
+        # Naming calls means acting on those calls only: nothing new is
+        # copied from the recorder, and nothing else in the archive is touched.
+        recordings = []
+        for raw in args.inputs:
+            resolved = _resolve_recording(raw, config)
+            if resolved is None:
+                return 1
+            if not resolved.is_file() or (
+                resolved.suffix.lower() not in config.audio_suffixes
+            ):
+                _warn(f"{PROGRAM_NAME}: no recording found for '{raw}'")
+                return 1
+            recordings.append(resolved)
+    else:
+        pipeline.copy_new(config, report, args.dry_run, notify)
+        recordings = sidecar.all_recordings(config)
     plans = [
         pipeline.plan_for(recording, config, refresh=not args.dry_run)
         for recording in recordings
@@ -197,7 +211,12 @@ def cmd_topic(args: argparse.Namespace, config: Config) -> int:
 
     notify = _reporter(args.quiet)
 
-    recordings = [sidecar.resolve_input(raw, config) for raw in args.inputs]
+    recordings = []
+    for raw in args.inputs:
+        resolved = _resolve_recording(raw, config)
+        if resolved is None:
+            return 1
+        recordings.append(resolved)
     if args.last:
         recordings.extend(sidecar.all_recordings(config)[-1:])
     if args.untagged:
@@ -729,7 +748,17 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "folders, then bring every call in the archive up to date. Each "
             "stage is skipped only when the call's sidecar says it already "
             "succeeded, so re-running is safe and a call left half-finished by "
-            "an earlier failure is retried rather than abandoned."
+            "an earlier failure is retried rather than abandoned. -l sets the "
+            "spoken language for transcription as well as the tag language."
+        ),
+    )
+    importer.add_argument(
+        "inputs",
+        nargs="*",
+        help=(
+            "only bring these calls up to date (recording, transcript or "
+            "sidecar path, or the hash id shown by `call index -l`), without "
+            "copying anything new from the recorder"
         ),
     )
     importer.add_argument(

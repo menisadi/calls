@@ -246,3 +246,77 @@ class TestTranscribe:
         with pytest.raises(cli.pipeline.PipelineError):
             self._run(config, [str(recording), "-f", "--no-index"])
         assert sidecar.translation_path_for(recording).is_file()
+
+
+class TestImportSelection:
+    BASE = "[A]_[0501111111]_2026-08-30_20-22-21"
+
+    def _import(self, config: Config, argv: list[str]):
+        parser = cli.build_parser(config)
+        args = parser.parse_args(["import", *argv])
+        return args.handler(args, config)
+
+    def test_only_the_named_call_is_acted_on(
+        self, config: Config, make_call, make_original, monkeypatch
+    ):
+        chosen = make_call(self.BASE)
+        other = make_call("[B]_[0502222222]_2026-08-31_10-00-00")
+        make_original("[C]_[0503333333]_2026-09-01_10-00-00", "incoming")
+        transcribed: list[str] = []
+
+        def fake_transcribe(recording, config, quiet, lang=None, model=None):
+            transcribed.append(f"{recording.stem}:{lang}")
+            recording.with_suffix(".txt").write_text("text", encoding="utf-8")
+
+        monkeypatch.setattr("calls.pipeline.transcribe", fake_transcribe)
+        monkeypatch.setattr("calls.pipeline.sidecar.record_tag", lambda *a, **k: None)
+        monkeypatch.setattr("calls.topic.Tagger.load", lambda *a, **k: _NoTagger())
+
+        self._import(config, [str(chosen), "-l", "en", "--no-index"])
+
+        assert transcribed == [f"{chosen.stem}:en"]
+        assert not other.with_suffix(".txt").exists()
+        # Nothing new was copied from the recorder.
+        assert not (
+            config.calls_dir / "[C]_[0503333333]_2026-09-01_10-00-00.opus"
+        ).exists()
+
+    def test_an_unknown_call_is_an_error(self, config: Config):
+        assert self._import(config, [str(config.calls_dir / "nope.opus")]) == 1
+
+
+class _NoTagger:
+    model_path = "m"
+
+    def tag(self, text: str, lang: str):
+        return sidecar.Tag(general="x")
+
+
+class TestTopicAcceptsHash:
+    def test_a_hash_prefix_resolves_to_the_call(
+        self, config: Config, indexed_call, monkeypatch
+    ):
+        recording = indexed_call("[A]_[0501111111]_2026-08-30_20-22-21")
+        index.build(config)
+        hash_id = index.listing(config, index.Filters(), limit=1)[0]["hash"]
+        seen: list[str] = []
+
+        class FakeTagger:
+            model_path = "m"
+
+            def tag(self, text: str, lang: str):
+                seen.append(text)
+                return sidecar.Tag(general="x")
+
+        monkeypatch.setattr("calls.topic.Tagger.load", lambda *a, **k: FakeTagger())
+        parser = cli.build_parser(config)
+        args = parser.parse_args(["topic", hash_id[:4]])
+
+        assert args.handler(args, config) == 0
+        assert seen == ["text"]
+        assert (
+            sidecar.stage_status(
+                sidecar.read(sidecar.sidecar_path_for(recording)), "topic"
+            )
+            == "ok"
+        )

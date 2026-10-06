@@ -189,7 +189,7 @@ def finish(
         try:
             if plan.scribe != "ok":
                 notify(f"{prefix} transcribing: {plan.base}")
-                transcribe(plan.recording, config, quiet)
+                transcribe(plan.recording, config, quiet, lang)
                 # Re-derive so the sidecar reflects the transcript that now
                 # exists; without this the call still looks untranscribed.
                 refreshed = sidecar.refresh(plan.recording, config)

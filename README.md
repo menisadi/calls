@@ -137,8 +137,18 @@ Every path and model is an environment variable:
 | `CALLS_SUMMARIZE_MAX_TOKENS` | `500` |
 | `CALLS_COUNTRY_CODE` | `972` |
 
-Use `-l en` for mostly-English transcripts: DictaLM is Hebrew-tuned and gives
-weaker, more generic tags on English-heavy content.
+Use `-l en` for mostly-English calls: it transcribes them in English (with the
+multilingual whisper model) and tags them with Qwen3-4B, since DictaLM is
+Hebrew-tuned and gives weaker, more generic tags on English-heavy content.
+
+`call import` takes optional call ids (or paths) to act on only those calls,
+copying nothing new from the recorder, so a mixed archive can be done in two
+passes:
+
+```
+call import <english ids...> -l en
+call import -l he                    # everything else
+```
 
 `call translate` is a separate command, not a stage of `call import`: unlike
 transcription and tagging, not every call needs an English copy, so it isn't
