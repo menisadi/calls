@@ -49,6 +49,12 @@ class Config:
     summarize_max_tokens: int
     country_code: str
     audio_suffixes: tuple[str, ...] = field(default=AUDIO_SUFFIXES)
+    # "local" (MLX) or "claude" (the `claude` CLI, opt-in: sends transcripts
+    # to Anthropic). Above `claude_confirm_above` calls in one run, the claude
+    # engine asks before starting, since each call is its own process.
+    engine: str = "local"
+    claude_model: str = "sonnet"
+    claude_confirm_above: int = 10
 
     @classmethod
     def from_env(cls) -> Config:
@@ -99,6 +105,11 @@ class Config:
                 os.environ.get("CALLS_SUMMARIZE_MAX_TOKENS", "500")
             ),
             country_code=os.environ.get("CALLS_COUNTRY_CODE", DEFAULT_COUNTRY_CODE),
+            engine=os.environ.get("CALLS_ENGINE", "local"),
+            claude_model=os.environ.get("CALLS_CLAUDE_MODEL", "sonnet"),
+            claude_confirm_above=int(
+                os.environ.get("CALLS_CLAUDE_CONFIRM_ABOVE", "10")
+            ),
         )
 
     def model_for_lang(self, lang: str) -> str:

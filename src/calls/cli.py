@@ -311,7 +311,46 @@ def _contact_recordings(contact: str, config: Config) -> list[Path]:
     return recordings
 
 
+def _load_backend(
+    args: argparse.Namespace, config: Config, count: int, local_name: str, load_local
+):
+    """The engine for translate/summarize: local MLX, or the claude CLI.
+
+    `load_local` loads the local model, named `local_name` in the progress
+    line. For claude, announce that transcripts are sent out, and ask first
+    when the run would start more than config.claude_confirm_above processes.
+    Returns None if declined or unavailable.
+    """
+    from .claude import ClaudeBackend, ClaudeError
+
+    if args.engine != "claude":
+        _reporter(args.quiet)(f"loading model: {args.model or local_name}")
+        return load_local(config, args.model)
+    try:
+        backend = ClaudeBackend.load(args.model or config.claude_model)
+    except ClaudeError as exc:
+        _warn(f"{PROGRAM_NAME}: {exc}")
+        return None
+    _reporter(args.quiet)(
+        f"engine: {backend.model_path} (transcripts are sent to Claude)"
+    )
+    if count > config.claude_confirm_above and not args.yes:
+        try:
+            reply = input(
+                f"This will start {count} claude processes "
+                f"(limit {config.claude_confirm_above}, counts against your "
+                "subscription usage). Continue? [y/N] "
+            )
+        except EOFError:
+            reply = ""
+        if reply.strip().lower() != "y":
+            _reporter(args.quiet)("skipped")
+            return None
+    return backend
+
+
 def cmd_translate(args: argparse.Namespace, config: Config) -> int:
+    from .claude import ClaudeError
     from .translate import Translator
 
     notify = _reporter(args.quiet)
@@ -362,8 +401,11 @@ def cmd_translate(args: argparse.Namespace, config: Config) -> int:
             print(f"{recording.stem}  [translate: {status}]")
         return 0
 
-    notify(f"loading model: {args.model or config.model_translate}")
-    translator = Translator.load(config, args.model)
+    translator = _load_backend(
+        args, config, len(recordings), config.model_translate, Translator.load
+    )
+    if translator is None:
+        return 1
 
     failures = 0
     for recording in recordings:
@@ -373,7 +415,12 @@ def cmd_translate(args: argparse.Namespace, config: Config) -> int:
             failures += 1
             continue
         notify(f"{recording.stem}: translating")
-        text = translator.translate(transcript.read_text(encoding="utf-8"))
+        try:
+            text = translator.translate(transcript.read_text(encoding="utf-8"))
+        except ClaudeError as exc:
+            _warn(f"{PROGRAM_NAME}: {exc}")
+            failures += 1
+            continue
         if not text:
             _warn(f"{PROGRAM_NAME}: model produced no output for {transcript.name}")
             failures += 1
@@ -389,6 +436,7 @@ def cmd_translate(args: argparse.Namespace, config: Config) -> int:
 
 
 def cmd_summarize(args: argparse.Namespace, config: Config) -> int:
+    from .claude import ClaudeError
     from .summarize import Summarizer
 
     notify = _reporter(args.quiet)
@@ -439,8 +487,11 @@ def cmd_summarize(args: argparse.Namespace, config: Config) -> int:
             print(f"{recording.stem}  [summarize: {status}]")
         return 0
 
-    notify(f"loading model: {args.model or config.model_summarize}")
-    summarizer = Summarizer.load(config, args.model)
+    summarizer = _load_backend(
+        args, config, len(recordings), config.model_summarize, Summarizer.load
+    )
+    if summarizer is None:
+        return 1
 
     failures = 0
     for recording in recordings:
@@ -453,7 +504,12 @@ def cmd_summarize(args: argparse.Namespace, config: Config) -> int:
             failures += 1
             continue
         notify(f"{recording.stem}: summarizing")
-        summary = summarizer.summarize(translation.read_text(encoding="utf-8"))
+        try:
+            summary = summarizer.summarize(translation.read_text(encoding="utf-8"))
+        except ClaudeError as exc:
+            _warn(f"{PROGRAM_NAME}: {exc}")
+            failures += 1
+            continue
         if not summary:
             _warn(f"{PROGRAM_NAME}: model produced no output for {translation.name}")
             failures += 1
@@ -715,6 +771,12 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             f"(default: {config.translate_max_tokens})\n"
             "  CALLS_SUMMARIZE_MAX_TOKENS  Summary generation ceiling "
             f"(default: {config.summarize_max_tokens})\n"
+            f"  CALLS_ENGINE         translate/summarize engine: local or claude "
+            f"(default: {config.engine})\n"
+            "  CALLS_CLAUDE_MODEL   Model alias for --engine claude "
+            f"(default: {config.claude_model})\n"
+            "  CALLS_CLAUDE_CONFIRM_ABOVE  Ask before a claude run over this "
+            f"many calls (default: {config.claude_confirm_above})\n"
             f"  CALLS_COUNTRY_CODE   Country code for local numbers "
             f"(default: {config.country_code})"
         ),
@@ -906,7 +968,27 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         ),
     )
     translator.add_argument(
-        "-m", "--model", help="MLX model to use (overrides the default)"
+        "-m",
+        "--model",
+        help="model to use for the chosen engine (MLX path, or claude alias)",
+    )
+    translator.add_argument(
+        "--engine",
+        choices=("local", "claude"),
+        default=config.engine,
+        help=(
+            "local MLX model, or the `claude` CLI (opt-in: sends transcripts "
+            f"to Claude; default: {config.engine})"
+        ),
+    )
+    translator.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help=(
+            "with --engine claude, don't ask for confirmation when the run "
+            "exceeds CALLS_CLAUDE_CONFIRM_ABOVE calls"
+        ),
     )
     translator.set_defaults(handler=cmd_translate)
 
@@ -962,7 +1044,27 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         ),
     )
     summarizer.add_argument(
-        "-m", "--model", help="MLX model to use (overrides the default)"
+        "-m",
+        "--model",
+        help="model to use for the chosen engine (MLX path, or claude alias)",
+    )
+    summarizer.add_argument(
+        "--engine",
+        choices=("local", "claude"),
+        default=config.engine,
+        help=(
+            "local MLX model, or the `claude` CLI (opt-in: sends transcripts "
+            f"to Claude; default: {config.engine})"
+        ),
+    )
+    summarizer.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help=(
+            "with --engine claude, don't ask for confirmation when the run "
+            "exceeds CALLS_CLAUDE_CONFIRM_ABOVE calls"
+        ),
     )
     summarizer.set_defaults(handler=cmd_summarize)
 
