@@ -259,15 +259,15 @@ def stage_status(sidecar: dict[str, Any], stage: str) -> str:
 TRANSLATION_STATES = ("none", "local", "claude")
 
 
-def translation_state(sidecar: dict[str, Any]) -> str:
-    """Which engine translated the call: "none", "local" or "claude".
+def stage_engine(sidecar: dict[str, Any], stage: str) -> str:
+    """Which engine finished a stage: "none", "local" or "claude".
 
     The claude backend records its model as "claude:<alias>"; anything else
-    that finished - including a translation with no model recorded - is local.
+    that finished - including a stage with no model recorded - is local.
     """
-    if stage_status(sidecar, "translate") != "ok":
+    if stage_status(sidecar, stage) != "ok":
         return "none"
-    model = str(sidecar["stages"]["translate"].get("model") or "")
+    model = str(sidecar["stages"][stage].get("model") or "")
     return "claude" if model.startswith("claude:") else "local"
 
 

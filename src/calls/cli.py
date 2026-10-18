@@ -312,6 +312,15 @@ def _contact_recordings(contact: str, config: Config) -> list[Path]:
     return recordings
 
 
+def _stage_line(recording: Path, stage: str) -> str:
+    """One --list line: the call, the stage's status and, once done, its engine."""
+    data = sidecar.read(sidecar.sidecar_path_for(recording))
+    status = sidecar.stage_status(data, stage)
+    if status == "ok":
+        status = f"ok ({sidecar.stage_engine(data, stage)})"
+    return f"{recording.stem}  [{stage}: {status}]"
+
+
 def _load_backend(
     args: argparse.Namespace, config: Config, count: int, local_name: str, load_local
 ):
@@ -396,10 +405,7 @@ def cmd_translate(args: argparse.Namespace, config: Config) -> int:
         return 1
     if args.list:
         for recording in recordings:
-            status = sidecar.stage_status(
-                sidecar.read(sidecar.sidecar_path_for(recording)), "translate"
-            )
-            print(f"{recording.stem}  [translate: {status}]")
+            print(_stage_line(recording, "translate"))
         return 0
 
     translator = _load_backend(
@@ -482,10 +488,7 @@ def cmd_summarize(args: argparse.Namespace, config: Config) -> int:
         return 1
     if args.list:
         for recording in recordings:
-            status = sidecar.stage_status(
-                sidecar.read(sidecar.sidecar_path_for(recording)), "summarize"
-            )
-            print(f"{recording.stem}  [summarize: {status}]")
+            print(_stage_line(recording, "summarize"))
         return 0
 
     summarizer = _load_backend(

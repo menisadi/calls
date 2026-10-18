@@ -364,3 +364,35 @@ class TestIndexIds:
     def test_rejects_an_unknown_translation_state(self, config: Config):
         with pytest.raises(SystemExit):
             self._run(config, ["-l", "--translation", "none,openai"])
+
+
+class TestListShowsEngine:
+    def _run(self, config: Config, argv: list[str]):
+        parser = cli.build_parser(config)
+        args = parser.parse_args(argv)
+        return args.handler(args, config)
+
+    def test_translate_and_summarize_list_name_the_engine(
+        self, config: Config, indexed_call, capsys
+    ):
+        local = indexed_call("[A]_[0501111111]_2026-08-30_20-22-21")
+        claude = indexed_call("[B]_[0502222222]_2026-08-29_20-22-21")
+        missing = indexed_call("[C]_[0503333333]_2026-08-28_20-22-21")
+        sidecar.record_translation(local, "hi", "mlx-model")
+        sidecar.record_translation(claude, "hi", "claude:sonnet")
+        sidecar.record_summary(claude, "short", "claude:sonnet")
+        paths = [str(local), str(claude), str(missing)]
+
+        assert self._run(config, ["translate", "--list", *paths]) == 0
+        assert capsys.readouterr().out.splitlines() == [
+            f"{local.stem}  [translate: ok (local)]",
+            f"{claude.stem}  [translate: ok (claude)]",
+            f"{missing.stem}  [translate: missing]",
+        ]
+
+        assert self._run(config, ["summarize", "--list", *paths]) == 0
+        assert capsys.readouterr().out.splitlines() == [
+            f"{local.stem}  [summarize: missing]",
+            f"{claude.stem}  [summarize: ok (claude)]",
+            f"{missing.stem}  [summarize: missing]",
+        ]

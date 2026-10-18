@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import DEFAULT_COUNTRY_CODE, Config
-from .sidecar import Tag, normalize_phone, read, translation_state
+from .sidecar import Tag, normalize_phone, read, stage_engine
 
 # Trigram indexing cannot answer a query shorter than one trigram.
 MIN_SEARCH_LENGTH = 3
@@ -209,7 +209,7 @@ def _row_from_sidecar(sidecar_path: Path) -> dict[str, Any] | None:
         "scribe_status": scribe.get("status") or "missing",
         "scribe_words": scribe.get("words"),
         "topic_status": topic.get("status") or "missing",
-        "translation": translation_state(data),
+        "translation": stage_engine(data, "translate"),
         "recording": data.get("recording"),
         "transcript": transcript_name,
         "path": str(sidecar_path.parent),
