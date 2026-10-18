@@ -20,6 +20,7 @@ from . import index, pipeline, sidecar
 from .config import Config
 from .index import Filters, format_duration
 from .pipeline import ImportReport
+from .sidecar import TRANSLATION_STATES
 
 PROGRAM_NAME = "call"
 
@@ -532,22 +533,27 @@ def cmd_index(args: argparse.Namespace, config: Config) -> int:
         since=args.since,
         until=args.until,
         untagged=args.untagged,
+        translation=args.translation,
         country_code=config.country_code,
     )
+    # --ids feeds other commands, so a silent cut at the display default
+    # would drop calls; it only stops early when --limit is given.
+    limit = args.limit
+    if limit is None:
+        limit = sys.maxsize if args.ids else 50
 
-    if args.search:
-        _print_rows(
-            index.search(config, args.search, filters, args.limit),
-            show_snippet=True,
-            verbose=args.verbose,
-        )
-        return 0
-    if args.list:
-        _print_rows(
-            index.listing(config, filters, args.limit),
-            show_snippet=False,
-            verbose=args.verbose,
-        )
+    if args.search or args.list or args.ids:
+        if args.search:
+            rows = index.search(config, args.search, filters, limit)
+        else:
+            rows = index.listing(config, filters, limit)
+        if args.ids:
+            if not rows:
+                _warn("no matching calls")
+            for row in rows:
+                print(row["hash"])
+        else:
+            _print_rows(rows, show_snippet=bool(args.search), verbose=args.verbose)
         return 0
     _rebuild(config, notify)
     return 0
@@ -746,6 +752,17 @@ def _add_lang_options(parser: argparse.ArgumentParser, config: Config) -> None:
     parser.add_argument(
         "-m", "--model", help="MLX model to use (overrides the language's default)"
     )
+
+
+def _translation_states(value: str) -> list[str]:
+    """Parse --translation's comma-separated list of states."""
+    states = [part.strip() for part in value.split(",") if part.strip()]
+    unknown = [state for state in states if state not in TRANSLATION_STATES]
+    if not states or unknown:
+        raise argparse.ArgumentTypeError(
+            f"expected a comma-separated list of {', '.join(TRANSLATION_STATES)}"
+        )
+    return states
 
 
 def build_parser(config: Config) -> argparse.ArgumentParser:
@@ -1084,6 +1101,10 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "  call index -s 'תקלה במערכת'          search the transcripts\n"
             "  call index -l --contact 0525252145  list one contact's calls\n"
             "  call index -l --untagged            find calls with no tag\n"
+            "  call translate --engine claude $(call index -s 'לוגים' "
+            "--translation none,local --ids)\n"
+            "                                       translate matches Claude "
+            "hasn't done yet\n"
             "  call index -l --color=always | less -RS\n"
             "                                       page with color, no wrapping"
         ),
@@ -1103,10 +1124,27 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         "--untagged", action="store_true", help="only calls with no topic tag"
     )
     idx.add_argument(
+        "--translation",
+        type=_translation_states,
+        metavar="STATES",
+        help=(
+            "only calls whose translation is in this comma-separated list of "
+            "none, local, claude (e.g. none,local = not translated by Claude)"
+        ),
+    )
+    idx.add_argument(
+        "--ids",
+        action="store_true",
+        help=(
+            "print only the hash id of each matching call, one per line, for "
+            "passing to other commands; lists every match unless --limit is given"
+        ),
+    )
+    idx.add_argument(
         "--limit",
         type=int,
-        default=50,
-        help="maximum rows to show (default: %(default)s)",
+        default=None,
+        help="maximum rows to show (default: 50, or no limit with --ids)",
     )
     idx.add_argument(
         "-v",

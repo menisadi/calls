@@ -256,6 +256,21 @@ def stage_status(sidecar: dict[str, Any], stage: str) -> str:
     return str(entry.get("status") or "missing")
 
 
+TRANSLATION_STATES = ("none", "local", "claude")
+
+
+def translation_state(sidecar: dict[str, Any]) -> str:
+    """Which engine translated the call: "none", "local" or "claude".
+
+    The claude backend records its model as "claude:<alias>"; anything else
+    that finished - including a translation with no model recorded - is local.
+    """
+    if stage_status(sidecar, "translate") != "ok":
+        return "none"
+    model = str(sidecar["stages"]["translate"].get("model") or "")
+    return "claude" if model.startswith("claude:") else "local"
+
+
 def now_stamp() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 

@@ -199,6 +199,23 @@ class TestListing:
         index.build(archive)
         assert len(index.listing(archive, Filters(), limit=2)) == 2
 
+    def test_translation_filter_selects_by_engine(self, archive: Config):
+        local = archive.calls_dir / "[דור אקוקה]_[0547602488]_2026-08-19_11-48-33.opus"
+        claude = (
+            archive.calls_dir / "[Ariel Hanemann]_[0525252145]_2026-08-26_11-07-18.opus"
+        )
+        sidecar.record_translation(local, "hi", "mlx-model")
+        sidecar.record_translation(claude, "hi", "claude:sonnet")
+        index.build(archive)
+
+        def dates(states: list[str]) -> list[str]:
+            rows = index.listing(archive, Filters(translation=states), limit=50)
+            return [row["date"] for row in rows]
+
+        assert dates(["none"]) == ["2026-08-30"]
+        assert dates(["claude"]) == ["2026-08-26"]
+        assert dates(["none", "local"]) == ["2026-08-30", "2026-08-19"]
+
 
 class TestHash:
     def test_matches_the_row_shown_in_listings(self, archive: Config):

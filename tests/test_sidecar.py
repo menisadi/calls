@@ -236,6 +236,26 @@ class TestRefresh:
         assert "words" not in data["stages"]["translate"]
         assert data["transcript_en"] is None
 
+    def test_translation_state_tells_the_engines_apart(self, config: Config, make_call):
+        recording = make_call(HEBREW_BASE, transcript="text")
+        assert sidecar.translation_state(sidecar.refresh(recording, config)) == "none"
+
+        sidecar.record_translation(recording, "hi", "mlx-community/some-model")
+        data = sidecar.read(sidecar.sidecar_path_for(recording))
+        assert sidecar.translation_state(data) == "local"
+
+        sidecar.record_translation(recording, "hi", "claude:sonnet")
+        data = sidecar.read(sidecar.sidecar_path_for(recording))
+        assert sidecar.translation_state(data) == "claude"
+
+    def test_a_translation_with_no_recorded_model_counts_as_local(
+        self, config: Config, make_call
+    ):
+        # refresh() marks the stage ok from the .en.txt alone, with no model.
+        recording = make_call(HEBREW_BASE, transcript="text")
+        sidecar.translation_path_for(recording).write_text("hi", encoding="utf-8")
+        assert sidecar.translation_state(sidecar.refresh(recording, config)) == "local"
+
     def test_a_translation_that_disappears_downgrades_the_stage(
         self, config: Config, make_call
     ):

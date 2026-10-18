@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import DEFAULT_COUNTRY_CODE, Config
-from .sidecar import Tag, normalize_phone, read
+from .sidecar import Tag, normalize_phone, read, translation_state
 
 # Trigram indexing cannot answer a query shorter than one trigram.
 MIN_SEARCH_LENGTH = 3
@@ -52,6 +52,7 @@ CREATE TABLE calls (
     scribe_status    TEXT NOT NULL DEFAULT 'missing',
     scribe_words     INTEGER,
     topic_status     TEXT NOT NULL DEFAULT 'missing',
+    translation      TEXT NOT NULL DEFAULT 'none',
     recording        TEXT,
     transcript       TEXT,
     path             TEXT NOT NULL
@@ -74,11 +75,13 @@ INSERT_CALL = """
 INSERT INTO calls (
     base, hash, contact, phone, phone_raw, direction, started_at, date, time,
     duration_seconds, channels, tag, tag_general, tag_specific,
-    scribe_status, scribe_words, topic_status, recording, transcript, path
+    scribe_status, scribe_words, topic_status, translation, recording, transcript,
+    path
 ) VALUES (
     :base, :hash, :contact, :phone, :phone_raw, :direction, :started_at, :date, :time,
     :duration_seconds, :channels, :tag, :tag_general, :tag_specific,
-    :scribe_status, :scribe_words, :topic_status, :recording, :transcript, :path
+    :scribe_status, :scribe_words, :topic_status, :translation, :recording,
+    :transcript, :path
 )
 """
 
@@ -101,6 +104,8 @@ class Filters:
     since: str | None = None
     until: str | None = None
     untagged: bool = False
+    # Translation states to keep ("none", "local", "claude"); None keeps all.
+    translation: list[str] | None = None
     country_code: str = DEFAULT_COUNTRY_CODE
 
     def clauses(self) -> tuple[list[str], list[Any]]:
@@ -134,6 +139,10 @@ class Filters:
             params.append(self.until)
         if self.untagged:
             clauses.append("calls.topic_status != 'ok'")
+        if self.translation:
+            placeholders = ", ".join("?" * len(self.translation))
+            clauses.append(f"calls.translation IN ({placeholders})")
+            params.extend(self.translation)
         return clauses, params
 
 
@@ -200,6 +209,7 @@ def _row_from_sidecar(sidecar_path: Path) -> dict[str, Any] | None:
         "scribe_status": scribe.get("status") or "missing",
         "scribe_words": scribe.get("words"),
         "topic_status": topic.get("status") or "missing",
+        "translation": translation_state(data),
         "recording": data.get("recording"),
         "transcript": transcript_name,
         "path": str(sidecar_path.parent),

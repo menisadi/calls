@@ -320,3 +320,47 @@ class TestTopicAcceptsHash:
             )
             == "ok"
         )
+
+
+class TestIndexIds:
+    def _run(self, config: Config, argv: list[str]):
+        parser = cli.build_parser(config)
+        args = parser.parse_args(["index", *argv])
+        return args.handler(args, config)
+
+    def test_prints_only_hashes_of_the_matches(
+        self, config: Config, indexed_call, capsys
+    ):
+        indexed_call("[A]_[0501111111]_2026-08-30_20-22-21", transcript="לוגים")
+        claude = indexed_call(
+            "[B]_[0502222222]_2026-08-29_20-22-21", transcript="לוגים"
+        )
+        indexed_call("[C]_[0503333333]_2026-08-28_20-22-21", transcript="משהו אחר")
+        sidecar.record_translation(claude, "logs", "claude:sonnet")
+        index.build(config)
+
+        assert (
+            self._run(config, ["-s", "לוגים", "--translation", "none,local", "--ids"])
+            == 0
+        )
+
+        assert capsys.readouterr().out.split() == [
+            index.call_hash("[A]_[0501111111]_2026-08-30_20-22-21")
+        ]
+
+    def test_ids_are_not_cut_at_the_display_limit(
+        self, config: Config, indexed_call, capsys
+    ):
+        for day in range(1, 4):
+            indexed_call(f"[A]_[0501111111]_2026-08-0{day}_20-22-21")
+        index.build(config)
+
+        assert self._run(config, ["--ids"]) == 0
+        assert len(capsys.readouterr().out.split()) == 3
+
+        assert self._run(config, ["--ids", "--limit", "2"]) == 0
+        assert len(capsys.readouterr().out.split()) == 2
+
+    def test_rejects_an_unknown_translation_state(self, config: Config):
+        with pytest.raises(SystemExit):
+            self._run(config, ["-l", "--translation", "none,openai"])

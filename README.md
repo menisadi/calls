@@ -12,6 +12,8 @@ call index -l --untagged             # find calls that never got tagged
 call transcribe a1b2c3d -l en        # retranscribe in another language
 call translate --untranslated        # translate every Hebrew call to English
 call summarize --unsummarized        # summarize every translated call
+call translate --engine claude $(call index -s 'לוגים' --translation none,local --ids)
+                                     # translate matches Claude hasn't done yet
 call rm a1b2c3d                      # remove by the hash id shown in `call index -l`
 call rm --older-than 90 --recording-only   # reclaim space, keep transcripts forever
 ```
