@@ -322,10 +322,27 @@ class TestTopicAcceptsHash:
         )
 
 
-class TestIndexIds:
+class TestIndexRebuildsOnly:
+    def test_rebuilds_without_printing_a_listing(
+        self, config: Config, indexed_call, capsys
+    ):
+        indexed_call("[A]_[0501111111]_2026-08-30_20-22-21")
+        parser = cli.build_parser(config)
+        args = parser.parse_args(["index", "-q"])
+
+        assert args.handler(args, config) == 0
+        assert capsys.readouterr().out == ""
+        assert len(index.listing(config, index.Filters(), 10)) == 1
+
+    def test_no_longer_takes_query_flags(self, config: Config):
+        with pytest.raises(SystemExit):
+            cli.build_parser(config).parse_args(["index", "-l"])
+
+
+class TestLsIds:
     def _run(self, config: Config, argv: list[str]):
         parser = cli.build_parser(config)
-        args = parser.parse_args(["index", *argv])
+        args = parser.parse_args(["ls", *argv])
         return args.handler(args, config)
 
     def test_prints_only_hashes_of_the_matches(
@@ -363,7 +380,7 @@ class TestIndexIds:
 
     def test_rejects_an_unknown_translation_state(self, config: Config):
         with pytest.raises(SystemExit):
-            self._run(config, ["-l", "--translation", "none,openai"])
+            self._run(config, ["--translation", "none,openai"])
 
 
 class TestListShowsEngine:
@@ -408,7 +425,7 @@ class TestListingTranslationMark:
         index.build(config)
 
         parser = cli.build_parser(config)
-        args = parser.parse_args(["index", "-l", "--color", "never"])
+        args = parser.parse_args(["ls", "--color", "never"])
         assert args.handler(args, config) == 0
 
         lines = capsys.readouterr().out.splitlines()

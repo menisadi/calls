@@ -281,7 +281,7 @@ def _resolve_hash(raw: str, config: Config) -> list[str]:
 
 
 def _resolve_recording(raw: str, config: Config) -> Path | None:
-    """A transcript/sidecar/recording path, or a hash prefix from `call index -l`.
+    """A transcript/sidecar/recording path, or a hash prefix from `call ls`.
 
     Shared by translate/summarize, and resolves the same way `call rm`/`call
     show` do: `raw` as a path first, then as a hash prefix. Returns None
@@ -542,9 +542,13 @@ def cmd_summarize(args: argparse.Namespace, config: Config) -> int:
 
 
 def cmd_index(args: argparse.Namespace, config: Config) -> int:
+    _rebuild(config, _reporter(args.quiet))
+    return 0
+
+
+def cmd_ls(args: argparse.Namespace, config: Config) -> int:
     global _COLOR_MODE
     _COLOR_MODE = args.color
-    notify = _reporter(args.quiet)
     filters = Filters(
         contact=args.contact,
         direction=args.direction,
@@ -560,20 +564,17 @@ def cmd_index(args: argparse.Namespace, config: Config) -> int:
     if limit is None:
         limit = sys.maxsize if args.ids else 50
 
-    if args.search or args.list or args.ids:
-        if args.search:
-            rows = index.search(config, args.search, filters, limit)
-        else:
-            rows = index.listing(config, filters, limit)
-        if args.ids:
-            if not rows:
-                _warn("no matching calls")
-            for row in rows:
-                print(row["hash"])
-        else:
-            _print_rows(rows, show_snippet=bool(args.search), verbose=args.verbose)
-        return 0
-    _rebuild(config, notify)
+    if args.search:
+        rows = index.search(config, args.search, filters, limit)
+    else:
+        rows = index.listing(config, filters, limit)
+    if args.ids:
+        if not rows:
+            _warn("no matching calls")
+        for row in rows:
+            print(row["hash"])
+    else:
+        _print_rows(rows, show_snippet=bool(args.search), verbose=args.verbose)
     return 0
 
 
@@ -854,7 +855,7 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         nargs="*",
         help=(
             "only bring these calls up to date (recording, transcript or "
-            "sidecar path, or the hash id shown by `call index -l`), without "
+            "sidecar path, or the hash id shown by `call ls`), without "
             "copying anything new from the recorder"
         ),
     )
@@ -932,7 +933,7 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         nargs="+",
         help=(
             "recording, transcript or sidecar path, or the hash id shown by "
-            "`call index -l` (a unique prefix of it is enough)"
+            "`call ls` (a unique prefix of it is enough)"
         ),
     )
     transcriber.add_argument(
@@ -967,7 +968,7 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         nargs="*",
         help=(
             "transcript or recording path, or the hash id shown by "
-            "`call index -l` (a unique prefix of it is enough)"
+            "`call ls` (a unique prefix of it is enough)"
         ),
     )
     translator.add_argument(
@@ -1043,7 +1044,7 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         nargs="*",
         help=(
             "transcript or recording path, or the hash id shown by "
-            "`call index -l` (a unique prefix of it is enough)"
+            "`call ls` (a unique prefix of it is enough)"
         ),
     )
     summarizer.add_argument(
@@ -1106,45 +1107,49 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
     idx = subparsers.add_parser(
         "index",
         parents=[common],
-        help="rebuild, search or list the index",
+        help="rebuild the index from the sidecars",
+        description="Rebuild the SQLite index from the sidecars.",
+    )
+    idx.set_defaults(handler=cmd_index)
+
+    lister = subparsers.add_parser(
+        "ls",
+        parents=[common],
+        help="list or search calls",
         description=(
-            "With no options, rebuilds the SQLite index from the sidecars. "
-            "Search is substring-based "
-            "(FTS5 trigram), so queries need at least 3 characters and Hebrew "
-            "prefixes do not hide matches."
+            "List calls from the index, newest first, or search their "
+            "transcripts with -s. Search is substring-based (FTS5 trigram), so "
+            "queries need at least 3 characters and Hebrew prefixes do not "
+            "hide matches."
         ),
         epilog=(
             "Examples:\n"
-            "  call index                          rebuild\n"
-            "  call index -s 'תקלה במערכת'          search the transcripts\n"
-            "  call index -l --contact 0525252145  list one contact's calls\n"
-            "  call index -l --untagged            find calls with no tag\n"
-            "  call translate --engine claude $(call index -s 'לוגים' "
+            "  call ls -s 'תקלה במערכת'          search the transcripts\n"
+            "  call ls --contact 0525252145     list one contact's calls\n"
+            "  call ls --untagged               find calls with no tag\n"
+            "  call translate --engine claude $(call ls -s 'לוגים' "
             "--translation none,local --ids)\n"
-            "                                       translate matches Claude "
+            "                                    translate matches Claude "
             "hasn't done yet\n"
-            "  call index -l --color=always | less -RS\n"
-            "                                       page with color, no wrapping\n"
+            "  call ls --color=always | less -RS\n"
+            "                                    page with color, no wrapping\n"
             "\n"
             "In listings, a mark before the hash shows who translated the call:\n"
             "  ✦ Claude   · local model   (none) not translated"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    idx.add_argument("-s", "--search", help="full-text search across transcripts")
-    idx.add_argument(
-        "-l", "--list", action="store_true", help="list calls instead of rebuilding"
-    )
-    idx.add_argument("--contact", help="filter by contact name or phone substring")
-    idx.add_argument(
+    lister.add_argument("-s", "--search", help="full-text search across transcripts")
+    lister.add_argument("--contact", help="filter by contact name or phone substring")
+    lister.add_argument(
         "--direction", choices=["in", "out", "unknown"], help="filter by direction"
     )
-    idx.add_argument("--since", help="only calls on or after YYYY-MM-DD")
-    idx.add_argument("--until", help="only calls on or before YYYY-MM-DD")
-    idx.add_argument(
+    lister.add_argument("--since", help="only calls on or after YYYY-MM-DD")
+    lister.add_argument("--until", help="only calls on or before YYYY-MM-DD")
+    lister.add_argument(
         "--untagged", action="store_true", help="only calls with no topic tag"
     )
-    idx.add_argument(
+    lister.add_argument(
         "--translation",
         type=_translation_states,
         metavar="STATES",
@@ -1153,7 +1158,7 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "none, local, claude (e.g. none,local = not translated by Claude)"
         ),
     )
-    idx.add_argument(
+    lister.add_argument(
         "--ids",
         action="store_true",
         help=(
@@ -1161,26 +1166,26 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "passing to other commands; lists every match unless --limit is given"
         ),
     )
-    idx.add_argument(
+    lister.add_argument(
         "--limit",
         type=int,
         default=None,
         help="maximum rows to show (default: 50, or no limit with --ids)",
     )
-    idx.add_argument(
+    lister.add_argument(
         "-v",
         "--verbose",
         action="store_true",
         help="also show each call's base name",
     )
-    idx.add_argument(
+    lister.add_argument(
         "-C",
         "--color",
         choices=["auto", "always", "never"],
         default="auto",
         help="colorize output (default: %(default)s; use 'always' with less -R)",
     )
-    idx.set_defaults(handler=cmd_index)
+    lister.set_defaults(handler=cmd_ls)
 
     remover = subparsers.add_parser(
         "rm",
@@ -1198,7 +1203,7 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         nargs="*",
         help=(
             "call base name, any of its files, or the hash id shown by "
-            "`call index -l` (a unique prefix of it is enough)"
+            "`call ls` (a unique prefix of it is enough)"
         ),
     )
     remover.add_argument(
@@ -1240,7 +1245,7 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         description=(
             "Print the transcript for one call, resolved the same way `call rm` "
             "resolves its argument: a base name, any of its files, or a unique "
-            "hash prefix from `call index -l`. Prints the English translation "
+            "hash prefix from `call ls`. Prints the English translation "
             "instead of the Hebrew transcript when one exists, unless --lang "
             "says otherwise."
         ),
@@ -1249,7 +1254,7 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
         "name",
         help=(
             "call base name, any of its files, or the hash id shown by "
-            "`call index -l` (a unique prefix of it is enough)"
+            "`call ls` (a unique prefix of it is enough)"
         ),
     )
     shower.add_argument(

@@ -6,16 +6,16 @@ English, summarize them, and search them.
 
 ```
 call import                          # copy new recordings, then finish what's outstanding
-call index -s 'תקלה במערכת'           # full-text search the transcripts
-call index -l --contact 0525252145   # list one contact's calls
-call index -l --untagged             # find calls that never got tagged
+call ls -s 'תקלה במערכת'              # full-text search the transcripts
+call ls --contact 0525252145         # list one contact's calls
+call ls --untagged                   # find calls that never got tagged
                                      # (in listings, ✦ = translated by Claude, · = locally)
 call transcribe a1b2c3d -l en        # retranscribe in another language
 call translate --untranslated        # translate every Hebrew call to English
 call summarize --unsummarized        # summarize every translated call
-call translate --engine claude $(call index -s 'לוגים' --translation none,local --ids)
+call translate --engine claude $(call ls -s 'לוגים' --translation none,local --ids)
                                      # translate matches Claude hasn't done yet
-call rm a1b2c3d                      # remove by the hash id shown in `call index -l`
+call rm a1b2c3d                      # remove by the hash id shown in `call ls`
 call rm --older-than 90 --recording-only   # reclaim space, keep transcripts forever
 ```
 
@@ -46,7 +46,7 @@ tokenizer, a different format — without any risk to the archive itself.
 There is deliberately only one index. An earlier `index.md` table was dropped
 once `calls.db` existed: it was a third copy of data already held in two
 places, rewritten on every build, and the only artifact whose format could
-break on an odd tag. `call index -l` scans better than a table did, and this
+break on an odd tag. `call ls` scans better than a table did, and this
 archive is local-only, so nothing else was ever going to read the file.
 
 ## Why it works this way
