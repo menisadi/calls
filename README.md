@@ -9,6 +9,7 @@ call import                          # copy new recordings, then finish what's o
 call index -s 'תקלה במערכת'           # full-text search the transcripts
 call index -l --contact 0525252145   # list one contact's calls
 call index -l --untagged             # find calls that never got tagged
+                                     # (in listings, ✦ = translated by Claude, · = locally)
 call transcribe a1b2c3d -l en        # retranscribe in another language
 call translate --untranslated        # translate every Hebrew call to English
 call summarize --unsummarized        # summarize every translated call

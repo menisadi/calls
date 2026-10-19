@@ -396,3 +396,24 @@ class TestListShowsEngine:
             f"{claude.stem}  [summarize: ok (claude)]",
             f"{missing.stem}  [summarize: missing]",
         ]
+
+
+class TestListingTranslationMark:
+    def test_marks_who_translated_each_call(self, config: Config, indexed_call, capsys):
+        claude = indexed_call("[A]_[0501111111]_2026-08-30_20-22-21")
+        local = indexed_call("[B]_[0502222222]_2026-08-29_20-22-21")
+        indexed_call("[C]_[0503333333]_2026-08-28_20-22-21")
+        sidecar.record_translation(claude, "hi", "claude:sonnet")
+        sidecar.record_translation(local, "hi", "mlx-model")
+        index.build(config)
+
+        parser = cli.build_parser(config)
+        args = parser.parse_args(["index", "-l", "--color", "never"])
+        assert args.handler(args, config) == 0
+
+        lines = capsys.readouterr().out.splitlines()
+        assert lines[0].endswith("  ✦ #" + index.call_hash(claude.stem))
+        assert lines[1].endswith("  · #" + index.call_hash(local.stem))
+        assert lines[2].endswith(
+            "  #" + index.call_hash("[C]_[0503333333]_2026-08-28_20-22-21")
+        )

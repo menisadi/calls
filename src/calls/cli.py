@@ -78,6 +78,20 @@ def _reporter(quiet: bool):
 
 _ARROW_STYLE = {"in": (_BLUE, _BOLD), "out": (_RED, _BOLD)}
 
+# Shown before the hash in listings: who translated the call. Untranslated
+# calls get nothing, so the common case stays uncluttered.
+_TRANSLATION_MARK = {"claude": ("✦",), "local": ("·", _DIM)}
+
+
+def _translation_mark(row: sqlite3.Row) -> str:
+    # An index built before the column existed simply shows no marker.
+    if "translation" not in row.keys():
+        return ""
+    mark = _TRANSLATION_MARK.get(row["translation"])
+    if mark is None:
+        return ""
+    return _style(*mark) + " "
+
 
 def _print_rows(
     rows: list[sqlite3.Row], show_snippet: bool, verbose: bool = False
@@ -94,6 +108,7 @@ def _print_rows(
             f"{_style(contact, _BOLD, _CYAN)} "
             f"({format_duration(row['duration_seconds'])})  "
             f"{_style(row['tag'], _YELLOW)}  "
+            f"{_translation_mark(row)}"
             f"{_style('#' + row['hash'], _DIM)}"
         )
         if verbose:
@@ -1109,7 +1124,10 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "                                       translate matches Claude "
             "hasn't done yet\n"
             "  call index -l --color=always | less -RS\n"
-            "                                       page with color, no wrapping"
+            "                                       page with color, no wrapping\n"
+            "\n"
+            "In listings, a mark before the hash shows who translated the call:\n"
+            "  ✦ Claude   · local model   (none) not translated"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
