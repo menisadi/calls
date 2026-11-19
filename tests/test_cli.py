@@ -284,6 +284,33 @@ class TestImportSelection:
     def test_an_unknown_call_is_an_error(self, config: Config):
         assert self._import(config, [str(config.calls_dir / "nope.opus")]) == 1
 
+    def test_match_copies_and_finishes_only_matching_recordings(
+        self, config: Config, make_call, make_original, monkeypatch
+    ):
+        outstanding = make_call(self.BASE)
+        make_original("[Dana]_[0503333333]_2026-09-01_10-00-00", "incoming")
+        make_original("[Other]_[0504444444]_2026-09-02_10-00-00", "outgoing")
+        transcribed: list[str] = []
+
+        def fake_transcribe(recording, config, quiet, lang=None, model=None):
+            transcribed.append(recording.stem)
+            recording.with_suffix(".txt").write_text("text", encoding="utf-8")
+
+        monkeypatch.setattr("calls.pipeline.transcribe", fake_transcribe)
+        monkeypatch.setattr("calls.pipeline.sidecar.record_tag", lambda *a, **k: None)
+        monkeypatch.setattr("calls.topic.Tagger.load", lambda *a, **k: _NoTagger())
+
+        self._import(config, ["--match", "dana", "--no-index"])
+
+        assert transcribed == ["[Dana]_[0503333333]_2026-09-01_10-00-00"]
+        assert not (
+            config.calls_dir / "[Other]_[0504444444]_2026-09-02_10-00-00.opus"
+        ).exists()
+        assert not outstanding.with_suffix(".txt").exists()
+
+    def test_match_with_named_calls_is_an_error(self, config: Config):
+        assert self._import(config, [str(config.calls_dir), "--match", "x"]) == 1
+
 
 class _NoTagger:
     model_path = "m"

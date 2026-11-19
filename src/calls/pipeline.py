@@ -71,18 +71,31 @@ def _new_originals(config: Config) -> Iterator[tuple[Path, str]]:
 
 
 def copy_new(
-    config: Config, report: ImportReport, dry_run: bool, notify: Reporter
-) -> None:
+    config: Config,
+    report: ImportReport,
+    dry_run: bool,
+    notify: Reporter,
+    patterns: list[str] | None = None,
+) -> list[Path]:
     """Copy anything new out of the recorder's folder, recording direction.
+
+    With patterns, only originals whose name contains one of them
+    (case-insensitively) are considered. Returns the archive path of every
+    original considered, whether copied now or earlier.
 
     Originals are left in place: that folder is a receive-only Syncthing share,
     so deleting from it risks Syncthing either reintroducing the file or losing
     the recording on the phone.
     """
     config.calls_dir.mkdir(parents=True, exist_ok=True)
+    lowered = [pattern.lower() for pattern in patterns or []]
+    considered: list[Path] = []
 
     for original, direction in _new_originals(config):
+        if lowered and not any(p in original.name.lower() for p in lowered):
+            continue
         destination = config.calls_dir / original.name
+        considered.append(destination)
         if destination.exists():
             # Already imported. Refresh the sidecar anyway: while the original
             # is still here, this is the last chance to record the direction.
@@ -103,6 +116,7 @@ def copy_new(
             sidecar.refresh(destination, config, direction=direction),
         )
         report.copied.append(original.name)
+    return considered
 
 
 def plan_for(recording: Path, config: Config, refresh: bool = True) -> Plan:

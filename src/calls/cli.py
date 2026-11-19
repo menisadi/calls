@@ -146,6 +146,9 @@ def cmd_import(args: argparse.Namespace, config: Config) -> int:
     notify = _reporter(args.quiet)
     report = ImportReport()
 
+    if args.inputs and args.match:
+        _warn(f"{PROGRAM_NAME} import: give calls or --match, not both")
+        return 1
     if args.inputs:
         # Naming calls means acting on those calls only: nothing new is
         # copied from the recorder, and nothing else in the archive is touched.
@@ -160,6 +163,10 @@ def cmd_import(args: argparse.Namespace, config: Config) -> int:
                 _warn(f"{PROGRAM_NAME}: no recording found for '{raw}'")
                 return 1
             recordings.append(resolved)
+    elif args.match:
+        # Matching acts on the matching calls only, like naming them does.
+        considered = pipeline.copy_new(config, report, args.dry_run, notify, args.match)
+        recordings = [path for path in considered if path.is_file()]
     else:
         pipeline.copy_new(config, report, args.dry_run, notify)
         recordings = sidecar.all_recordings(config)
@@ -857,6 +864,15 @@ def build_parser(config: Config) -> argparse.ArgumentParser:
             "only bring these calls up to date (recording, transcript or "
             "sidecar path, or the hash id shown by `call ls`), without "
             "copying anything new from the recorder"
+        ),
+    )
+    importer.add_argument(
+        "--match",
+        action="append",
+        metavar="TEXT",
+        help=(
+            "only copy and bring up to date recorder files whose name contains "
+            "TEXT (case-insensitive; repeat to match any of several)"
         ),
     )
     importer.add_argument(
